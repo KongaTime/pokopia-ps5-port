@@ -1,0 +1,54 @@
+P1 on the console: PPSA90002 launched from the home screen (ShadowMount), 2026-11-04 04:46 build (commit 0c01f10).
+Read back over FTP from /data/homebrew/PPSA90002/p1-results/results.txt, verbatim below. No eboot_crash.txt; nxrt.log 13892 bytes.
+
+pokopia-ps5 P1: 21 lifted programs on the runtime
+STAGE runtime init
+STAGE load 21 programs
+STAGE link
+STAGE ABI mismatch check
+PASS abi_mismatch_refused
+STAGE register 21 modules
+RUN 00_smoke
+PASS 00_smoke
+RUN 01_int
+PASS 01_int
+RUN 02_switch
+PASS 02_switch
+RUN 03_fp
+PASS 03_fp
+RUN 04_neon_int
+PASS 04_neon_int
+RUN 05_neon_fp_mem
+PASS 05_neon_fp_mem
+RUN 06_crypto_crc
+PASS 06_crypto_crc
+RUN 07_lse
+PASS 07_lse
+RUN 08_excl
+PASS 08_excl
+RUN 10_virtual
+PASS 10_virtual
+RUN 11_tailcall
+PASS 11_tailcall
+RUN 12_eh_basic
+PASS 12_eh_basic
+RUN 13_eh_classes
+PASS 13_eh_classes
+RUN 14_eh_calls
+PASS 14_eh_calls
+RUN 09_tls
+PASS 09_tls
+RUN 19_eh_probe
+PASS 19_eh_probe
+RUN 20_eh_hier
+PASS 20_eh_hier
+RUN 21_eh_ptr
+PASS 21_eh_ptr
+RUN 22_eh_rethrow_nested
+PASS 22_eh_rethrow_nested
+RUN 23_eh_catchall_misc
+PASS 23_eh_catchall_misc
+RUN 26_eh_threads
+PASS 26_eh_threads
+eh: 4112 raised, 4112 caught, 19458 cleanups, 0 uncaught
+RESULT 22/22 passed
