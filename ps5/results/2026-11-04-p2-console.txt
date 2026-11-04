@@ -1,0 +1,39 @@
+P2 on the console: Pokémon Pokopia 2.0.1 (the player's own dump) on the PS5 runtime, graphics off ([boot] gfx = none)
+Title PPSA90006, launched through PS5_Vulkan's ps5vkctl agent (port 9111) with klog captured (port 3232), 2026-11-04.
+
+How far it gets (eighth run, build d821fba + raw-syscall wraps)
+---------------------------------------------------------------
+  boot.txt      runtime init, map rtld/main/sdk/subsdk0, link (the game's own rtld), enter rtld
+  pkp.log       45.7 s of the game:
+                  rtld -> nn::init -> nninitStartup -> nnMain on the lifted code
+                  sm, lm, appletOE (am), aoc:u, ectx:aw, pctl, time:u, fsp-srv (RomFS from /app0/romfs), acc:u0
+                  the 12 GiB guest heap section made and committed
+                  22 guest threads created and running (priorities, core masks)
+                  nvnBootstrapLoader, ~1800 NVN entry points by name, device, memory pools, texture builders
+                  nn::vi::OpenDefaultDisplay / CreateLayer tried ~10 times
+                  svcExitProcess from the game itself (sdk caller chain): its window setup cannot succeed on NVN logging
+                  stubs, which return 0 for every call
+                svc: 2327 calls, 23 distinct, 0 unknown (SleepThread 830, WaitProcessWideKeyAtomic 260, SendSyncRequest 251)
+  klog          no refused call; the fatal signal recorded at the end is the title's own exit
+
+That is the end of what P2 can show without graphics: the next step is a real NVN back end (P3: Vulkan through RADV,
+as KongaTime's Monado-PS5 and Darkness titles render).
+
+What the eight runs found and fixed
+-----------------------------------
+  1  chdir into /app0 is refused to a title                     absolute /app0 paths
+  2  services read their paths during nxrt::init                NXRT_* variables set before init
+  3  ended mapping main, nothing logged                         every log line flushed on the console; SIGSYS reported
+  4  the console's libc heap (~400 MiB flexible memory)          malloc family on ps5platform's direct-memory heap (--wrap)
+  5  SYSTEM_ILLEGAL_FUNCTION_CALL at 43 s, no signal             breadcrumbs of compat kernel calls (calls.txt)
+  6  same, last call SendSyncRequest to fsp-srv                  svc / HLE entry breadcrumbs
+  7  std::filesystem on refused calls (opendir, *at, access...)  ps5platform's ps5_ replacements (title/libc_ps5.cpp)
+  8  klog: "PPRBUG-22859: directly issued a syscall 244"          the SDK libc's raw syscall stubs: clock_nanosleep,
+     (clock_nanosleep, from compat's waitable timer)              pathconf, fork wrapped; ps5/tools/rawsys.sh finds none
+                                                                  called now (233 stubs in the image, 0 with callers)
+
+Known slow spot
+---------------
+  The heap commit takes about 40 s: ps5/compat/win32_memory.cpp backs and zeroes every 64 KiB unit of a section at
+  commit time (Windows only reserves charge then and backs pages on first touch). To do: back section units on first
+  touch from the fault handler.

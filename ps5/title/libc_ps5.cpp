@@ -56,4 +56,14 @@ int __wrap_link(const char* existing, const char* name) { return ps5_link(existi
 int __wrap_symlink(const char* target, const char* name) { return ps5_symlink(target, name); }
 mode_t __wrap_umask(mode_t mask) { return ps5_umask(mask); }
 
+// The SDK's libc links these as raw system call stubs (mov $n, %rax; syscall), and a title may make no system call
+// itself: the seventh P2 run's klog says "PPRBUG-22859: the process directly issued a syscall 244" (clock_nanosleep,
+// from compat's waitable timer) before SYSTEM_ILLEGAL_FUNCTION_CALL. These three are the raw stubs anything in the title
+// calls (ps5/tools/rawsys.sh scans the linked image for them).
+int __wrap_clock_nanosleep(clockid_t clock, int flags, const struct timespec* request, struct timespec* remain) {
+    return ps5_clock_nanosleep(clock, flags, request, remain);
+}
+long __wrap_pathconf(const char* path, int name) { return ps5_pathconf(path, name); }
+pid_t __wrap_fork(void) { return ps5_fork(); }
+
 }  // extern "C"

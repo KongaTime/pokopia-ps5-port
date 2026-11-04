@@ -68,6 +68,7 @@ function(ps5_title target)
         -Wl,--wrap=utimensat -Wl,--wrap=futimens -Wl,--wrap=sysconf -Wl,--wrap=pthread_getaffinity_np
         -Wl,--wrap=pthread_setaffinity_np -Wl,--wrap=mkstemp -Wl,--wrap=tmpfile -Wl,--wrap=readlink -Wl,--wrap=link
         -Wl,--wrap=symlink -Wl,--wrap=umask
+        -Wl,--wrap=clock_nanosleep -Wl,--wrap=pathconf -Wl,--wrap=fork   # raw syscall stubs in the SDK libc
         -Wl,--exclude-libs=ALL -Wl,--eh-frame-hdr -Wl,--build-id=none
         -Wl,--no-dependent-libraries # the runtime's #pragma comment(lib, "avrt.lib") and the like name Windows libraries
         "-Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/title/ps5-pie.ld")
