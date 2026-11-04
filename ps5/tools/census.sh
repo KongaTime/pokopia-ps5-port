@@ -20,11 +20,14 @@ mkdir -p "$OUT/logs"
 REPORT=$OUT/census.txt
 : > "$REPORT"
 
-# What runtime/CMakeLists.txt gives nxrt, minus the Windows-only definitions (NOMINMAX etc.).
-INCLUDES=(-I"$HERE/runtime/include" -I"$HERE/runtime/src" -I"$HERE/recomp/include" -I"$HERE/runtime/third_party")
+# What runtime/CMakeLists.txt gives nxrt, minus the Windows-only definitions (NOMINMAX etc.), plus the PS5 build's own:
+# ps5/compat on the include path (the Win32 subset) and its prelude force-included.
+INCLUDES=(-I"$HERE/runtime/include" -I"$HERE/runtime/src" -I"$HERE/recomp/include" -I"$HERE/runtime/third_party"
+          -I"$HERE/ps5/compat")
 # shellcheck disable=SC2206
 [ -n "${CENSUS_EXTRA_INCLUDES:-}" ] && INCLUDES+=($CENSUS_EXTRA_INCLUDES)
-FLAGS=(-std=c++20 -fsyntax-only -mcx16 -fno-strict-aliasing -ffp-contract=off -Wno-everything -ferror-limit=0)
+FLAGS=(-std=c++20 -fsyntax-only -mcx16 -fno-strict-aliasing -ffp-contract=off -Wno-everything -ferror-limit=0
+       -include "$HERE/ps5/compat/prelude.h")
 
 total=0; ok=0; missing=0; other=0
 declare -A headers=()
