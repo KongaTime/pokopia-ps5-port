@@ -16,6 +16,7 @@
 
 namespace nxrt::audio {
 std::shared_ptr<AudioSink> make_xaudio2_sink() { return nullptr; }
+std::vector<OutputDevice> list_output_devices() { return {}; }   // MMDevice: no endpoint list on the console (one output)
 }  // namespace nxrt::audio
 
 namespace nxrt::services {
@@ -48,5 +49,6 @@ MovieStats movie_stats() { return {}; }
 }  // namespace nxrt::media
 
 namespace nxrt::extras {
-void hdr_note_layer_luminance(bool, unsigned, unsigned) {}
+// Weak: a build that links the graphics shell (the game title) gets the real one from src/gfx/extras.
+__attribute__((weak)) void hdr_note_layer_luminance(bool, unsigned, unsigned) {}
 }  // namespace nxrt::extras

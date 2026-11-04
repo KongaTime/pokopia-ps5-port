@@ -109,7 +109,7 @@ if(PKP_LIFT AND PKP_DEPS)
 
     file(GLOB_RECURSE PS5_GFX_SOURCES CONFIGURE_DEPENDS "${ROOT}/runtime/src/gfx/*.cpp")
     list(FILTER PS5_GFX_SOURCES EXCLUDE REGEX "(nvn_gpu_stub|temporal_dlss|win_display)[.]cpp$")
-    add_library(nxrt_gfx STATIC ${PS5_GFX_SOURCES} "${CMAKE_CURRENT_SOURCE_DIR}/gfx/astc2bc7_off.cpp")
+    add_library(nxrt_gfx STATIC ${PS5_GFX_SOURCES} "${CMAKE_CURRENT_SOURCE_DIR}/gfx/astc2bc7_off.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/gfx/gfx_ps5.cpp")
     target_include_directories(nxrt_gfx PUBLIC "${ROOT}/runtime/include" "${ROOT}/runtime/src/gfx/nvn/third_party" "${ROOT}/tools/textures/include"
                                "${PKP_DEPS}/vma/include"
                                PRIVATE "${ROOT}/runtime/src" "${ROOT}/runtime/src/gfx" "${ROOT}/runtime/src/gfx/nvn")
