@@ -31,15 +31,18 @@ fail() { printf 'error: %s\n' "$*" >&2; exit 2; }
 upload_tree() {   # host local-dir remote-dir
     local ftp="ftp://$1:2121" src=$2 dst=$3 list
     list=$(mktemp)
-    ( cd "$src" && find . -type d | sort ) > "$list"
+    # Paths relative to src, without "./" (the console's FTP server refuses a "." component).
+    ( cd "$src" && find . -mindepth 1 -type d | sed 's|^\./||' | sort ) > "$list"
+    curl -gs --max-time 15 -u anonymous: -Q "MKD $dst" "$ftp/" >/dev/null 2>&1 || true
     while read -r d; do
-        curl -gs --max-time 15 -u anonymous: -Q "MKD $dst/${d#./}" "$ftp/" >/dev/null 2>&1 || true
+        curl -gs --max-time 15 -u anonymous: -Q "MKD $dst/$d" "$ftp/" >/dev/null 2>&1 || true
     done < "$list"
-    ( cd "$src" && find . -type f ! -name .listing | sort ) > "$list"
+    ( cd "$src" && find . -type f ! -name .listing | sed 's|^\./||' | sort ) > "$list"
     while read -r f; do
-        curl -gsS --max-time 3600 -u anonymous: -T "$src/${f#./}" "$ftp$dst/$(dirname "${f#./}")/" >/dev/null ||
-            fail "upload of $f failed"
-        printf '    %s\n' "${f#./}"
+        local dir=$dst
+        [[ $f == */* ]] && dir=$dst/${f%/*}
+        curl -gsS --max-time 3600 -u anonymous: -T "$src/$f" "$ftp$dir/" >/dev/null || fail "upload of $f failed"
+        printf '    %s\n' "$f"
     done < "$list"
     rm -f "$list"
 }
