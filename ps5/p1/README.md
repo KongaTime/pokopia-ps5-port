@@ -50,8 +50,8 @@ It has no picture: it posts "Pokopia P1 starting", runs for a few seconds, then 
 exits. Read the results back:
 
 ```bash
-curl -s ftp://<console-ip>:2121/data/pokopia-p1/results.txt
-curl -s ftp://<console-ip>:2121/data/pokopia-p1/nxrt.log
+curl -s ftp://<console-ip>:2121/data/homebrew/PPSA90002/p1-results/results.txt
+curl -s ftp://<console-ip>:2121/data/homebrew/PPSA90002/p1-results/nxrt.log
 ```
 
 `results.txt` has one line per step, written before the step runs (`STAGE`, `RUN`, then `PASS`/`FAIL` with the first

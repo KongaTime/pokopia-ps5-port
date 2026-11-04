@@ -8,8 +8,8 @@
 # the ones KongaTime's Monado-PS5 and The-Darkness-Recomp titles take: link with ps5-pie.ld, convert with ps5-native-tool,
 # sign, and ship PS5_Vulkan's libc.prx beside the eboot (a title has no libc of its own).
 #
-# Launch PPSA90002 from the home screen. It writes /data/pokopia-p1/results.txt (one line per step, then
-# "RESULT n/m passed") and the runtime log /data/pokopia-p1/nxrt.log, and posts a notification when it is done.
+# Launch PPSA90002 from the home screen. It writes p1-results/results.txt in its own folder (one line per step, then
+# "RESULT n/m passed") and the runtime log p1-results/nxrt.log, and posts a notification when it is done.
 set -euo pipefail
 
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
@@ -73,7 +73,7 @@ if [[ ${1:-} == --deploy ]]; then
     done
     # eboot.bin last: the title is not launchable until its main binary is there.
     curl -s --max-time 300 -u anonymous: -T "$dist/eboot.bin" "$ftp/data/homebrew/$tid/" >/dev/null
-    echo "    uploaded: launch $tid from the home screen, then read /data/pokopia-p1/results.txt"
+    echo "    uploaded: launch $tid from the home screen, then read /data/homebrew/$tid/p1-results/results.txt"
 else
     echo "==> [5/5] not uploaded (pass --deploy <console-ip>)"
 fi

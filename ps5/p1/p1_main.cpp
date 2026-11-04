@@ -7,10 +7,19 @@
 // the expected output (Unicorn, or the host's own C++ exceptions), and the callee-saved registers and SP intact across
 // the call. 26_eh_threads then runs thread_main on 8 guest threads at once.
 //
-// The verdict goes to /data/pokopia-p1/results.txt, one line per step written before the step runs, so a file that
-// stops says where. The runtime's own log is /data/pokopia-p1/nxrt.log. Read both back over FTP.
+// The verdict goes to /app0/p1-results/results.txt, one line per step written before the step runs, so a file that
+// stops says where; the runtime's own log is nxrt.log beside it. A title launched through ShadowMount cannot write /data
+// (KongaTime's Darkness title moved its output for that reason), but its own folder, /data/homebrew/PPSA90002 on the
+// console, is writable and readable over FTP.
+//
+// Static TLS: the runtime gives every guest thread a block laid out for the first loaded module that has TLS
+// (module_tls_template), which is right for a game (one main module) and wrong here, where each program has its own
+// TLS layout: 19-26's guest runtime keeps a 128 KiB exception arena in TLS, and read past 09_tls's small block on the
+// first console run (HOST EXCEPTION reading tpidr + 0x20020). So each case's threads get a block of their own program's
+// size and initial image before its code runs (use_case_tls), as each program has in its own process on Windows.
 #include <windows.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdarg>
 #include <cstdio>
@@ -38,7 +47,7 @@ constexpr int kNres = 512;
 constexpr uint64_t kHostBase = 0x7110000000ull;      // host services of the S1 programs' rt.h (raise / resume)
 constexpr uint64_t kHarnessEntry = 0x7120000000ull;  // guest addresses of the thread entries below (host functions)
 constexpr const char* kTests = "/app0/tests/";
-constexpr const char* kOut = "/data/pokopia-p1";
+constexpr const char* kOut = "/app0/p1-results";
 
 struct Case {
     const char* name;
@@ -77,6 +86,24 @@ void notify(const char* text) {
 
 // ---- the current case (the guest thread entries read these) ----
 const Case* g_case = nullptr;
+const nxrt::Module* g_case_module = nullptr;
+
+// The calling guest thread's static TLS block, made for the current case's program (thread.cpp's layout: the 16-byte TCB,
+// the program's TLS image at tp_offset, at least a page; the thread pointer also kept at TLS region + 0x1F0).
+bool use_case_tls(::Ctx* c) {
+    const nxrt::TlsInfo& t = g_case_module->tls();
+    if (!t.present()) return true;
+    const uint64_t need = t.tp_offset + t.mem_size + 0x100;
+    const uint64_t size = (std::max<uint64_t>(need, 0x1000) + 0xFFF) & ~uint64_t{0xFFF};
+    const uint64_t block = nxrt::mem::alloc_kernel(size, std::max<uint64_t>(t.align, 0x1000));
+    if (!block) return false;
+    std::memset(reinterpret_cast<void*>(block), 0, size);
+    if (t.file_size)
+        std::memcpy(reinterpret_cast<void*>(block + t.tp_offset), reinterpret_cast<const void*>(t.init_addr), t.file_size);
+    c->tpidr = block;
+    *reinterpret_cast<uint64_t*>(c->tpidrro + 0x1F0) = block;
+    return true;
+}
 uint64_t g_test_main = 0, g_thread_main = 0, g_results = 0;
 std::vector<uint64_t> g_expected;
 int g_thread_status = -1;
@@ -112,6 +139,10 @@ int compare_results() {
 
 // Guest thread entry: sentinels in the callee-saved registers, run test_main, check them (driver.cpp's harness_entry).
 void harness_entry(::Ctx* c) {
+    if (!use_case_tls(c)) {
+        report("  out of kernel memory for the case's TLS block");
+        return;
+    }
     const uint64_t sentinel = 0x5eed000000000000ull;
     for (int i = 19; i <= 29; i++) c->x[i] = sentinel + static_cast<uint64_t>(i);
     for (int i = 0; i < 8; i++) {
@@ -141,6 +172,10 @@ void harness_entry(::Ctx* c) {
 }
 
 void thread_entry(::Ctx* c) {
+    if (!use_case_tls(c)) {
+        g_thread_failures++;
+        return;
+    }
     const uint64_t idx = c->x[0];
     const uint64_t sentinel = 0x7a7a000000000000ull + (idx << 32);
     for (int i = 19; i <= 29; i++) c->x[i] = sentinel + static_cast<uint64_t>(i);
@@ -168,6 +203,7 @@ uint32_t start_guest_thread(const char* name, uint64_t entry, uint64_t arg, uint
 // One case: test_main on a guest thread, then (26_eh_threads) thread_main on N threads, then the comparison.
 bool run_case(const Case& c, nxrt::Module* m) {
     g_case = &c;
+    g_case_module = m;
     g_test_main = m->find_symbol("test_main");
     g_results = m->find_symbol("results");
     if (!g_test_main || !g_results) {
