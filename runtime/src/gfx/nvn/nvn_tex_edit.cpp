@@ -70,6 +70,18 @@ bool hooks_copy(gfx::TexEditHooks& h) {
     return true;
 }
 
+#if defined(__PROSPERO__)
+// No SEH on the console's compiler: ps5/compat's seh_guard (nvn_texprep.cpp has the same pair).
+uint64_t match_guarded(const gfx::TexEditHooks& h, const gfx::TexEditReq& r) {
+    uint64_t v = 0;
+    return ps5compat::seh_guard([&] { v = h.match(r, h.user); }) ? v : 0;
+}
+
+bool prepare_guarded(const Texture& t, const TexCaps& caps, PreparedTexture& out) {
+    bool ok = false;
+    return ps5compat::seh_guard([&] { ok = prepare_texture(t, caps, out); }) && ok;
+}
+#else
 // The host's match on the game's storage, under SEH (a page the game unmapped must not take the process down).
 uint64_t match_guarded(const gfx::TexEditHooks& h, const gfx::TexEditReq& r) {
     __try {
@@ -86,6 +98,7 @@ bool prepare_guarded(const Texture& t, const TexCaps& caps, PreparedTexture& out
         return false;
     }
 }
+#endif
 
 bool candidate(const Texture& t, void*) {
     return t.mem && !t.is_display && t.fmt && t.fmt->astc && t.layers == 1 && t.b.samples <= 1 && t.b.target == NVN_TEXTURE_TARGET_2D;

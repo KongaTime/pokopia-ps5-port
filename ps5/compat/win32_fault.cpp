@@ -14,6 +14,7 @@
 
 #include <ps5platform/context.h>
 
+#include <setjmp.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <ucontext.h>
@@ -37,6 +38,8 @@ std::mutex g_install_mu;
 bool g_installed = false;
 constexpr int kSignals[] = {SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGTRAP};
 struct sigaction g_previous[sizeof kSignals / sizeof kSignals[0]];
+
+thread_local sigjmp_buf *t_guard = nullptr;   // the innermost seh_guard of this thread
 
 // fxsave image in mc_fpstate: MXCSR at byte 24, XMM0..15 at byte 160 (16 bytes each).
 constexpr size_t kMxcsr = 24, kXmm = 160;
@@ -109,6 +112,8 @@ void on_signal(int sig, siginfo_t *info, void *uctx) {
         from_context(ctx, uc->uc_mcontext);
         return;
     }
+    // An access fault inside seh_guard: back out of the guarded call, as __except (EXCEPTION_EXECUTE_HANDLER) does.
+    if ((sig == SIGSEGV || sig == SIGBUS) && t_guard) siglongjmp(*t_guard, 1);
     // Nobody handled it: the disposition from before ours, and the fault happens again into it.
     for (size_t i = 0; i < sizeof kSignals / sizeof kSignals[0]; ++i)
         if (kSignals[i] == sig) sigaction(sig, &g_previous[i], nullptr);
@@ -131,6 +136,21 @@ thread_local void *t_altstack = nullptr;
 }  // namespace
 
 void fault_install() { install(); }
+
+bool seh_guard_call(void (*fn)(void *), void *arg) {
+    install();
+    sigjmp_buf jb;
+    sigjmp_buf *outer = t_guard;
+    // The signal mask is saved and restored (the handler runs with the fault's signal blocked unless SA_NODEFER; it is set).
+    if (sigsetjmp(jb, 1) != 0) {
+        t_guard = outer;
+        return false;
+    }
+    t_guard = &jb;
+    fn(arg);
+    t_guard = outer;
+    return true;
+}
 
 void fault_thread_init() {
     if (t_altstack) return;

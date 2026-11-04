@@ -82,6 +82,32 @@ const bool g_hitch_registered = (nxrt::hitch_add_counter("texprep_staged_kb", []
 
 State& S() { return *g_state; }
 
+#if defined(__PROSPERO__)
+// The console's compiler has no SEH: the same guards through ps5/compat's seh_guard (a fault in the call jumps back out,
+// skipping the destructors of what the call had made: only on a fault, which SEH also takes as fatal to the call).
+bool prepare_guarded(const Texture& t, const TexCaps& caps, PreparedTexture& out, bool& crashed) {
+    bool ok = false;
+    if (!ps5compat::seh_guard([&] { ok = prepare_texture(t, caps, out); })) {
+        crashed = true;
+        return false;
+    }
+    return ok;
+}
+
+bool hash_guarded(const Texture& t, uint64_t& h) {
+    bool ok = false;
+    if (!ps5compat::seh_guard([&] {
+            if (t.mem) {
+                h = hash_bytes(t.mem, static_cast<size_t>(t.storage_size));
+                ok = true;
+            } else {
+                ok = texture_hash_virtual(t, h);
+            }
+        }))
+        return false;
+    return ok;
+}
+#else
 bool prepare_guarded(const Texture& t, const TexCaps& caps, PreparedTexture& out, bool& crashed) {
     __try {
         return prepare_texture(t, caps, out);
@@ -103,6 +129,7 @@ bool hash_guarded(const Texture& t, uint64_t& h) {
         return false;
     }
 }
+#endif
 
 uint64_t now_ns() { return ft::now_ns(); }
 

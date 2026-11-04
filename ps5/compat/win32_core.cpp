@@ -647,6 +647,7 @@ int GetThreadPriority(HANDLE thread) {
 
 BOOL SetThreadPriorityBoost(HANDLE, BOOL) { return TRUE; }   // the console has no dynamic boost to turn off
 BOOL SetPriorityClass(HANDLE, DWORD) { return TRUE; }
+DWORD GetPriorityClass(HANDLE) { return NORMAL_PRIORITY_CLASS; }   // the console has no process priority classes
 
 DWORD_PTR SetThreadAffinityMask(HANDLE thread, DWORD_PTR mask) {
     Thread *t = thread_of(thread);
@@ -858,6 +859,11 @@ BOOL SetWaitableTimer(HANDLE timer, const LARGE_INTEGER *due, LONG period, PTIME
     t->fired = false;
     pthread_mutex_unlock(&t->mu);
     return TRUE;
+}
+
+BOOL SetWaitableTimerEx(HANDLE timer, const LARGE_INTEGER *due, LONG period, PTIMERAPCROUTINE apc, LPVOID apc_arg,
+                        PREASON_CONTEXT, ULONG) {
+    return SetWaitableTimer(timer, due, period, apc, apc_arg, FALSE);   // no power-management wake reasons on the console
 }
 
 BOOL CancelWaitableTimer(HANDLE timer) {

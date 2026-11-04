@@ -13,7 +13,7 @@ get_filename_component(ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 file(GLOB PS5_COMPAT_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/compat/*.cpp")
 add_library(ps5compat STATIC ${PS5_COMPAT_SOURCES})
 target_include_directories(ps5compat PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/compat")
-target_compile_options(ps5compat PUBLIC -include "${CMAKE_CURRENT_SOURCE_DIR}/compat/prelude.h" -fno-strict-aliasing)
+target_compile_options(ps5compat PUBLIC "SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/compat/prelude.h" -fno-strict-aliasing)
 target_link_libraries(ps5compat PUBLIC ps5platform)   # the SDK's platform layer: ps5_vrange_*, ps5_memory_query
 
 # ---- the runtime (nxrt) ----
@@ -75,4 +75,63 @@ if(P1_CASES)
     target_compile_options(pokopia_p1 PRIVATE -O2 -g1 -fno-omit-frame-pointer)
     target_link_libraries(pokopia_p1 PRIVATE ${P1_LIBS} nxrt)
     ps5_title(pokopia_p1)
+endif()
+
+# ---- the game: the four modules ps5/game/lift.sh lifts from the player's own dump (never in the repository) ----
+set(PKP_LIFT "" CACHE PATH "ps5/game/lift.sh output folder (main/, sdk/, subsdk0/, rtld/)")
+set(PKP_DEPS "" CACHE PATH "ps5/tools/fetch-deps.sh output folder (vulkan_headers/, volk/, vma/, imgui/)")
+set(PKP_SDL3_INCLUDE "/mnt/c/Users/kaika/Documents/Codex/2026-10-18/so-x20/work/SDL/include" CACHE PATH "the PS5 SDL3's headers")
+set(PKP_SDL3_LIB "/mnt/c/Users/kaika/Documents/Codex/2026-10-18/so-x20/work/khdays-port/build/ps5-sdl/SDL/libSDL3.a"
+    CACHE FILEPATH "the PS5 SDL3 static library (KongaTime's KH358/2 Days port builds it)")
+if(PKP_LIFT)
+    foreach(m main sdk subsdk0 rtld)
+        ps5_lifted_module(pkp_${m} "${PKP_LIFT}/${m}")
+    endforeach()
+    add_custom_target(pkp_modules DEPENDS pkp_main pkp_sdk pkp_subsdk0 pkp_rtld)
+endif()
+
+if(PKP_LIFT AND PKP_DEPS)
+    # The graphics shell (runtime/cmake/gfx.cmake's nxrt_gfx and its pinned dependencies) for the console. Left out: DLSS
+    # (temporal_dlss.cpp, NVIDIA's Windows SDK) and the Windows display-mode code (win_display.cpp); the ASTC transcoder is
+    # ps5/gfx/astc2bc7_off.cpp until P3. P2 runs with [boot] gfx = none, so none of the Vulkan path runs yet.
+    add_library(ps5_volk STATIC "${PKP_DEPS}/volk/volk.c")
+    target_include_directories(ps5_volk SYSTEM PUBLIC "${PKP_DEPS}/volk" "${PKP_DEPS}/vulkan_headers/include")
+    target_compile_definitions(ps5_volk PUBLIC VK_NO_PROTOTYPES)
+    add_library(ps5_imgui STATIC "${PKP_DEPS}/imgui/imgui.cpp" "${PKP_DEPS}/imgui/imgui_draw.cpp" "${PKP_DEPS}/imgui/imgui_tables.cpp"
+                                 "${PKP_DEPS}/imgui/imgui_widgets.cpp" "${PKP_DEPS}/imgui/backends/imgui_impl_vulkan.cpp")
+    target_include_directories(ps5_imgui SYSTEM PUBLIC "${PKP_DEPS}/imgui" "${PKP_DEPS}/imgui/backends")
+    target_compile_definitions(ps5_imgui PUBLIC IMGUI_IMPL_VULKAN_USE_VOLK)
+    target_link_libraries(ps5_imgui PUBLIC ps5_volk)
+    add_library(ps5_tiling STATIC "${ROOT}/tools/tiling/src/tegra_tiling.cpp")
+    target_include_directories(ps5_tiling PUBLIC "${ROOT}/tools/tiling/include")
+    add_library(ps5_sdl3 STATIC IMPORTED)
+    set_target_properties(ps5_sdl3 PROPERTIES IMPORTED_LOCATION "${PKP_SDL3_LIB}" INTERFACE_INCLUDE_DIRECTORIES "${PKP_SDL3_INCLUDE}")
+
+    file(GLOB_RECURSE PS5_GFX_SOURCES CONFIGURE_DEPENDS "${ROOT}/runtime/src/gfx/*.cpp")
+    list(FILTER PS5_GFX_SOURCES EXCLUDE REGEX "(nvn_gpu_stub|temporal_dlss|win_display)[.]cpp$")
+    add_library(nxrt_gfx STATIC ${PS5_GFX_SOURCES} "${CMAKE_CURRENT_SOURCE_DIR}/gfx/astc2bc7_off.cpp")
+    target_include_directories(nxrt_gfx PUBLIC "${ROOT}/runtime/include" "${ROOT}/runtime/src/gfx/nvn/third_party" "${ROOT}/tools/textures/include"
+                               "${PKP_DEPS}/vma/include"
+                               PRIVATE "${ROOT}/runtime/src" "${ROOT}/runtime/src/gfx" "${ROOT}/runtime/src/gfx/nvn")
+    target_compile_definitions(nxrt_gfx PUBLIC VMA_STATIC_VULKAN_FUNCTIONS=0 VMA_DYNAMIC_VULKAN_FUNCTIONS=1)
+    target_compile_options(nxrt_gfx PRIVATE -O2 -g1 -w -fno-omit-frame-pointer -mcx16 -ffp-contract=off
+                           "SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/compat/endian_fix.h")
+    target_link_libraries(nxrt_gfx PUBLIC nxrt ps5_volk ps5_imgui ps5_tiling ps5_sdl3)
+
+    # The game module (runtime/games/pkp/CMakeLists.txt: data, core, play hooks), as one library.
+    set(_pkp "${ROOT}/runtime/games/pkp")
+    add_library(nxrt_game_pkp STATIC "${_pkp}/pkp_data.cpp" "${_pkp}/pkp_core.cpp" "${_pkp}/pkp_tt_probe.cpp" "${_pkp}/pkp_game.cpp"
+                "${_pkp}/pkp_play.cpp" "${_pkp}/pkp_kbm.cpp" "${_pkp}/pkp_menu.cpp" "${_pkp}/pkp_movie_test.cpp" "${_pkp}/pkp_quality.cpp"
+                "${_pkp}/pkp_taa.cpp")
+    target_include_directories(nxrt_game_pkp PUBLIC "${ROOT}/runtime/games" "${_pkp}"
+                               PRIVATE "${ROOT}/runtime/src" "${ROOT}/runtime/src/gfx" "${ROOT}/runtime/src/gfx/play" "${ROOT}/runtime/src/testtools")
+    target_compile_options(nxrt_game_pkp PRIVATE -O2 -g1 -w -fno-omit-frame-pointer "SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/compat/endian_fix.h")
+    target_link_libraries(nxrt_game_pkp PUBLIC nxrt_gfx)
+
+    # The title (P2: ps5/game/pkp_ps5_main.cpp)
+    add_executable(pokopia_ps5 "${CMAKE_CURRENT_SOURCE_DIR}/game/pkp_ps5_main.cpp")
+    target_compile_options(pokopia_ps5 PRIVATE -O2 -g1 -fno-omit-frame-pointer)
+    target_link_libraries(pokopia_ps5 PRIVATE pkp_main pkp_sdk pkp_subsdk0 pkp_rtld nxrt_game_pkp nxrt_gfx nxrt
+                          ScePad SceAudioOut SceUserService SceSystemService SceNet)
+    ps5_title(pokopia_ps5)
 endif()

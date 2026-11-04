@@ -248,6 +248,33 @@ BOOL MoveFileExW(LPCWSTR from, LPCWSTR to, DWORD flags) {
 }
 BOOL MoveFileExW(const char *from, const char *to, DWORD flags) { return move(native_path(from), native_path(to), flags); }
 
+BOOL CopyFileA(LPCSTR from, LPCSTR to, BOOL fail_if_exists) {
+    const std::string src = native_path(from), dst = native_path(to);
+    const int in = open(src.c_str(), O_RDONLY | O_CLOEXEC);
+    if (in < 0) return fail_errno();
+    const int out = open(dst.c_str(), O_WRONLY | O_CREAT | O_CLOEXEC | (fail_if_exists ? O_EXCL : O_TRUNC), 0666);
+    if (out < 0) {
+        const int e = errno;
+        close(in);
+        SetLastError(e == EEXIST ? ERROR_FILE_EXISTS : error_of(e));
+        return FALSE;
+    }
+    char buf[1 << 16];
+    ssize_t n;
+    bool ok = true;
+    while ((n = read(in, buf, sizeof buf)) > 0)
+        for (ssize_t done = 0; done < n;) {
+            const ssize_t w = write(out, buf + done, size_t(n - done));
+            if (w < 0) { ok = false; break; }
+            done += w;
+        }
+    if (n < 0) ok = false;
+    close(in);
+    close(out);
+    if (!ok) return fail_errno();
+    return TRUE;
+}
+
 BOOL CreateDirectoryA(LPCSTR path, void *) { return make_dir(native_path(path)); }
 BOOL CreateDirectoryW(LPCWSTR path, void *) { return make_dir(native_path(utf8_of(path).c_str())); }
 BOOL CreateDirectoryW(const char *path, void *) { return make_dir(native_path(path)); }

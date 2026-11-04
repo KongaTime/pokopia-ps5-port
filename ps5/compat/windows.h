@@ -148,6 +148,7 @@ BOOL GetExitCodeThread(HANDLE thread, LPDWORD code);
 BOOL SetThreadPriority(HANDLE thread, int priority);
 int GetThreadPriority(HANDLE thread);
 BOOL SetPriorityClass(HANDLE process, DWORD cls);
+DWORD GetPriorityClass(HANDLE process);
 DWORD_PTR SetThreadAffinityMask(HANDLE thread, DWORD_PTR mask);
 BOOL GetThreadTimes(HANDLE thread, LPFILETIME creation, LPFILETIME exit, LPFILETIME kernel, LPFILETIME user);
 BOOL GetProcessTimes(HANDLE process, LPFILETIME creation, LPFILETIME exit, LPFILETIME kernel, LPFILETIME user);
@@ -189,6 +190,9 @@ HANDLE CreateWaitableTimerW(void *security, BOOL manual_reset, LPCWSTR name);
 BOOL SetWaitableTimer(HANDLE timer, const LARGE_INTEGER *due, LONG period, PTIMERAPCROUTINE apc, LPVOID apc_arg,
                       BOOL resume);
 BOOL CancelWaitableTimer(HANDLE timer);
+typedef struct _REASON_CONTEXT *PREASON_CONTEXT;
+BOOL SetWaitableTimerEx(HANDLE timer, const LARGE_INTEGER *due, LONG period, PTIMERAPCROUTINE apc, LPVOID apc_arg,
+                        PREASON_CONTEXT wake_context, ULONG tolerable_delay);
 
 // mutexes (named ones are only ever looked up inside this process: the console runs one title)
 HANDLE CreateMutexA(void *security, BOOL initial_owner, LPCSTR name);
@@ -397,6 +401,17 @@ typedef LONG(NTAPI *PVECTORED_EXCEPTION_HANDLER)(PEXCEPTION_POINTERS);
 typedef LONG(WINAPI *LPTOP_LEVEL_EXCEPTION_FILTER)(PEXCEPTION_POINTERS);
 typedef LPTOP_LEVEL_EXCEPTION_FILTER PTOP_LEVEL_EXCEPTION_FILTER;
 
+// __try / __except (EXCEPTION_EXECUTE_HANDLER): the console's compiler has no SEH. A caller that reads memory which may be
+// gone (the graphics shell's texture hashing reads the game's storage) runs the read through seh_guard instead: false when
+// an access fault in it reached no vectored handler that resumed it (the fault handler jumps back out of the guarded call).
+namespace ps5compat {
+bool seh_guard_call(void (*fn)(void *), void *arg);
+template <class F>
+bool seh_guard(F &&f) {
+    return seh_guard_call([](void *p) { (*static_cast<F *>(p))(); }, &f);
+}
+}  // namespace ps5compat
+
 PVOID AddVectoredExceptionHandler(ULONG first, PVECTORED_EXCEPTION_HANDLER handler);
 ULONG RemoveVectoredExceptionHandler(PVOID handle);
 LPTOP_LEVEL_EXCEPTION_FILTER SetUnhandledExceptionFilter(LPTOP_LEVEL_EXCEPTION_FILTER filter);
@@ -472,6 +487,7 @@ BOOL DeleteFileA(LPCSTR path);
 BOOL DeleteFileW(LPCWSTR path);
 BOOL MoveFileExA(LPCSTR from, LPCSTR to, DWORD flags);
 BOOL MoveFileExW(LPCWSTR from, LPCWSTR to, DWORD flags);
+BOOL CopyFileA(LPCSTR from, LPCSTR to, BOOL fail_if_exists);
 BOOL CreateDirectoryA(LPCSTR path, void *security);
 BOOL CreateDirectoryW(LPCWSTR path, void *security);
 DWORD GetFullPathNameA(LPCSTR path, DWORD size, LPSTR out, LPSTR *file_part);
