@@ -48,7 +48,8 @@ endfunction()
 function(ps5_title target)
     target_sources(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/title/app_crt.cpp"
                                      "${CMAKE_CURRENT_SOURCE_DIR}/title/posix_compat.cpp"
-                                     "${CMAKE_CURRENT_SOURCE_DIR}/title/fp_ieee.cpp")
+                                     "${CMAKE_CURRENT_SOURCE_DIR}/title/fp_ieee.cpp"
+                                     "${CMAKE_CURRENT_SOURCE_DIR}/title/libc_ps5.cpp")
     target_link_options(${target} PRIVATE
         -lkernel -Wl,--as-needed     # libkernel, not the driver's libkernel_web (PRX_SCE_MODULE_LOAD_ERROR otherwise)
         -nostartfiles                # app_crt.cpp's _start takes the console's process parameters
@@ -59,6 +60,14 @@ function(ps5_title target)
         -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc -Wl,--wrap=free -Wl,--wrap=posix_memalign
         -Wl,--wrap=aligned_alloc -Wl,--wrap=memalign -Wl,--wrap=malloc_usable_size -Wl,--wrap=reallocf
         -Wl,--wrap=reallocarray -Wl,--wrap=getline -Wl,--wrap=getdelim
+        # The libc calls a title is refused or lacks, on ps5platform's replacements (title/libc_ps5.cpp, ps5platform/libc.h):
+        # std::filesystem's directory streams and *at calls above all (the sixth P2 run ended in a file-system request).
+        -Wl,--wrap=opendir -Wl,--wrap=fdopendir -Wl,--wrap=readdir -Wl,--wrap=rewinddir -Wl,--wrap=dirfd -Wl,--wrap=closedir
+        -Wl,--wrap=openat -Wl,--wrap=unlinkat -Wl,--wrap=fchmodat -Wl,--wrap=fstatat -Wl,--wrap=mkdirat -Wl,--wrap=renameat
+        -Wl,--wrap=statvfs -Wl,--wrap=fstatvfs -Wl,--wrap=statfs -Wl,--wrap=fstatfs -Wl,--wrap=access -Wl,--wrap=getcwd
+        -Wl,--wrap=utimensat -Wl,--wrap=futimens -Wl,--wrap=sysconf -Wl,--wrap=pthread_getaffinity_np
+        -Wl,--wrap=pthread_setaffinity_np -Wl,--wrap=mkstemp -Wl,--wrap=tmpfile -Wl,--wrap=readlink -Wl,--wrap=link
+        -Wl,--wrap=symlink -Wl,--wrap=umask
         -Wl,--exclude-libs=ALL -Wl,--eh-frame-hdr -Wl,--build-id=none
         -Wl,--no-dependent-libraries # the runtime's #pragma comment(lib, "avrt.lib") and the like name Windows libraries
         "-Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/title/ps5-pie.ld")
