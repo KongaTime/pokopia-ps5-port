@@ -158,6 +158,9 @@ int main() {
         {"NXRT_NVN_PIPELINE_CACHE", "/pipeline_cache.bin"},
         {"NXRT_NVN_PIPELINE_KEYS", "/pipeline_keys.bin"},
         {"NXRT_NVN_SHADER_ORDER", "/shader_order.txt"},
+        // Translated shaders (<hash>.spv + results.tsv), made on a PC from the player's own romfs (pokopia-recomp's
+        // extract_corpus.py and spirv_harness) and uploaded beside the game data.
+        {"NXRT_NVN_SHADER_CACHE", "/shader_cache/spirv"},
     };
     for (const auto& p : kPaths) setenv(p.env, (std::string(kGame) + p.path).c_str(), 0);
     // P3: the NVN back end on RADV, in a window that is the console's video output (SDL3's ps5 driver: VK_KHR_display).

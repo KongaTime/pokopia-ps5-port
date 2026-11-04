@@ -5,6 +5,8 @@
 #   ps5/game/build.sh --deploy <ip>            ... and upload the title to /data/homebrew/PPSA90006
 #   ps5/game/build.sh --game-data <ip> <dump>  upload exefs/ and romfs/ of the player's own 2.0.1 dump into that folder
 #                                              (<dump> holds updates/655360/ or exefs/ + romfs/; once: 6.75 GB)
+#   ps5/game/build.sh --shaders <ip> <spirv> [<order>]  upload a translated shader cache (<hash>.spv + results.tsv, made on a
+#                                              PC from the player's romfs) to shader_cache/spirv, and shader_order.txt
 #
 # Needs ps5/game/lift.sh's output (PKP_LIFT, default /home/kai/pkp-ps5-build/game-lift) and ps5/tools/fetch-deps.sh's
 # (PKP_DEPS). The title carries no game files: the game data goes to the console's own title folder only, from the
@@ -57,6 +59,20 @@ if [[ ${1:-} == --game-data ]]; then
     for d in /data/homebrew "/data/homebrew/$tid"; do curl -s --max-time 15 -u anonymous: -Q "MKD $d" "ftp://$host:2121/" >/dev/null 2>&1 || true; done
     upload_tree "$host" "$dump/exefs" "/data/homebrew/$tid/exefs"
     upload_tree "$host" "$dump/romfs" "/data/homebrew/$tid/romfs"
+    echo "    done"
+    exit 0
+fi
+
+if [[ ${1:-} == --shaders ]]; then
+    host=${2:?usage: build.sh --shaders <ip> <spirv dir> [<shader_order.txt>]}
+    spirv=${3:?usage: build.sh --shaders <ip> <spirv dir> [<shader_order.txt>]}
+    [[ -f $spirv/results.tsv ]] || fail "no results.tsv in $spirv"
+    echo "==> shader cache from $spirv to $tid on $host"
+    for d in "/data/homebrew/$tid/shader_cache"; do curl -s --max-time 15 -u anonymous: -Q "MKD $d" "ftp://$host:2121/" >/dev/null 2>&1 || true; done
+    upload_tree "$host" "$spirv" "/data/homebrew/$tid/shader_cache/spirv"
+    if [[ -n ${4:-} ]]; then
+        curl -gs --max-time 60 -u anonymous: -T "$4" "ftp://$host:2121/data/homebrew/$tid/shader_order.txt" || fail "shader_order.txt upload"
+    fi
     echo "    done"
     exit 0
 fi
