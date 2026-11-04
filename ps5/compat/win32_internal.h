@@ -59,5 +59,12 @@ std::string native_path(const char *path);   // backslashes to slashes
 // Called by the fault layer (win32_fault.cpp) at the start of every thread the compat layer runs: the alternate signal
 // stack the fault handler runs on.
 void fault_thread_init();
+// Installs the fault handler (once): done by the first vectored handler, and by the first growable thread stack.
+void fault_install();
+
+// Thread stacks (win32_core.cpp) are reserved whole and committed as they grow, as Windows does: the fault handler calls
+// this first for an access fault, and resumes the thread when it returns true (the page was in a stack's reserve and
+// is committed now).
+bool stack_grow(uint64_t address);
 
 }  // namespace ps5compat

@@ -5,6 +5,7 @@
 #include <bcrypt.h>
 #include <mmsystem.h>
 #include <ps5platform/kernel.h>
+#include <ps5platform/shm.h>
 
 #include <errno.h>
 #include <pthread_np.h>
@@ -63,8 +64,60 @@ struct Waitable : Object {
     }
 };
 
+// ---- thread stacks ----
+//
+// A stack is a direct-memory reservation (ps5_vrange) with its top committed; the rest is committed by stack_grow when
+// the thread first touches it, from the fault handler, which runs on the thread's alternate signal stack. pthread
+// stacks would otherwise be backed whole at creation out of the title's small flexible budget: the runtime asks 64 MiB
+// for every guest thread.
+constexpr uint64_t kStackInitial = 1u << 20;   // committed at creation
+constexpr uint64_t kStackStep = 256u << 10;    // committed per growth fault
+constexpr int kStackSlots = 512;
+
+struct Stack {
+    std::atomic<uint64_t> lo{0}, hi{0};          // the reservation; 0 when the slot is free
+    std::atomic<uint64_t> committed{0};          // lowest committed address
+    std::atomic<uint64_t> dead_since{0};         // its thread ended at this time (now_ns); 0 while it runs
+};
+Stack g_stacks[kStackSlots];
+std::mutex g_stacks_mu;   // claiming and releasing slots (stack_grow reads them without it)
+
+// Releases the stacks of threads that ended more than a second ago (a detached thread still runs its last instructions
+// on its stack after its exit is signalled), then claims a slot for a new stack.
+Stack *stack_alloc(uint64_t size) {
+    std::lock_guard lk(g_stacks_mu);
+    const uint64_t t = now_ns();
+    Stack *free_slot = nullptr;
+    for (Stack &s : g_stacks) {
+        const uint64_t dead = s.dead_since.load(std::memory_order_acquire);
+        if (s.hi.load() && dead && t - dead > 1000000000ull) {
+            ps5_vrange_release(reinterpret_cast<void *>(s.lo.load()), s.hi.load() - s.lo.load());
+            s.hi.store(0);
+            s.lo.store(0);
+            s.dead_since.store(0);
+        }
+        if (!free_slot && !s.hi.load()) free_slot = &s;
+    }
+    if (!free_slot) return nullptr;
+    size = (size + 0xFFFF) & ~uint64_t{0xFFFF};
+    void *base = nullptr;
+    if (ps5_vrange_reserve(size, nullptr, 0x10000, &base) != 0) return nullptr;
+    const uint64_t lo = reinterpret_cast<uint64_t>(base), hi = lo + size;
+    const uint64_t first = hi - std::min<uint64_t>(kStackInitial, size);
+    if (ps5_vrange_commit(reinterpret_cast<void *>(first), hi - first, PS5_KERNEL_PROT_CPU_READ | PS5_KERNEL_PROT_CPU_WRITE) != 0) {
+        ps5_vrange_release(base, size);
+        return nullptr;
+    }
+    free_slot->committed.store(first);
+    free_slot->lo.store(lo);
+    free_slot->dead_since.store(0);
+    free_slot->hi.store(hi, std::memory_order_release);
+    return free_slot;
+}
+
 struct Thread : Waitable {
     Thread() : Waitable(Kind::Thread) { init_sync(); }
+    Stack *stack = nullptr;      // a stack of ours, released after the thread ends
     pthread_t pt{};
     DWORD id = 0;
     bool adopted = false;        // a thread the compat layer did not start (main thread, std::thread)
@@ -167,6 +220,7 @@ struct SelfGuard {
         if (t->exit_code == 259) t->exit_code = 0;
         pthread_cond_broadcast(&t->cv);
         pthread_mutex_unlock(&t->mu);
+        if (t->stack) t->stack->dead_since.store(now_ns(), std::memory_order_release);
         {
             std::lock_guard lk(g_threads_mu);
             g_threads.erase(t->id);
@@ -333,6 +387,26 @@ std::map<std::string, Mutex *> g_named;
 // ---------------------------------------------------------------------------------------------------------------------
 // shared helpers (win32_internal.h)
 
+bool stack_grow(uint64_t address) {
+    for (Stack &s : g_stacks) {
+        const uint64_t hi = s.hi.load(std::memory_order_acquire);
+        if (!hi) continue;
+        const uint64_t lo = s.lo.load(), committed = s.committed.load();
+        if (address < lo || address >= committed) continue;
+        // Commit from a step below the fault up to what is committed; the lowest page stays a guard: a stack that runs
+        // through its whole reserve faults there, as on Windows.
+        uint64_t from = (address & ~(kStackStep - 1));
+        if (from <= lo) from = lo + 0x4000;
+        if (address < from) return false;
+        if (ps5_vrange_commit(reinterpret_cast<void *>(from), committed - from,
+                              PS5_KERNEL_PROT_CPU_READ | PS5_KERNEL_PROT_CPU_WRITE) != 0)
+            return false;
+        s.committed.store(from, std::memory_order_release);
+        return true;
+    }
+    return false;
+}
+
 void retain(Object *o) { o->refs.fetch_add(1, std::memory_order_relaxed); }
 
 void release(Object *o) {
@@ -484,12 +558,22 @@ HANDLE CreateThread(void *, SIZE_T stack, LPTHREAD_START_ROUTINE start, LPVOID p
     }
     pthread_attr_t attr;
     pthread_attr_init(&attr);
-    // Windows reserves the stack and commits it as it grows; the console backs a pthread stack at creation. The runtime
-    // asks for 64 MiB per guest thread ([threads] host_stack_mb), which is what it gets.
-    if (stack) pthread_attr_setstacksize(&attr, std::max<size_t>(stack, 256 * 1024));
+    // Windows reserves the stack and commits it as it grows, and so does this (stack_alloc): the runtime asks for 64 MiB
+    // per guest thread ([threads] host_stack_mb). Without a size the thread gets the console's default stack.
+    if (stack) {
+        fault_install();   // growth comes through the fault handler
+        t->stack = stack_alloc(std::max<size_t>(stack, 256 * 1024));
+        if (t->stack) {
+            const uint64_t lo = t->stack->lo.load(), hi = t->stack->hi.load();
+            pthread_attr_setstack(&attr, reinterpret_cast<void *>(lo), hi - lo);
+        } else {
+            pthread_attr_setstacksize(&attr, std::max<size_t>(stack, 256 * 1024));
+        }
+    }
     const int e = pthread_create(&t->pt, &attr, thread_main, t);
     pthread_attr_destroy(&attr);
     if (e != 0) {
+        if (t->stack) t->stack->dead_since.store(1, std::memory_order_release);   // long dead: the next claim frees it
         {
             std::lock_guard lk(g_threads_mu);
             g_threads.erase(t->id);

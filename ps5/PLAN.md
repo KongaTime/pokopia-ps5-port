@@ -29,6 +29,33 @@ The Win32 surface in those 40 files is small and repetitive: SRW locks and condi
 `QueryPerformanceCounter`, `CreateThread`/priority/affinity/`Suspend`/`ResumeThread`, vectored exception handlers with `CONTEXT`,
 `CreateFileW`/`ReadFile`/`WriteFile`, UTF-8/UTF-16 conversion.
 
+## Compat layer status (2026-11-03)
+
+`ps5/compat/` is written and builds for the PS5 (`ps5/tools/build-compat.sh` → `libps5compat.a`, `-Wall -Wextra` clean); every
+function its headers declare is defined. **Not yet run on hardware**: P1 is what exercises it.
+
+| File | What it does |
+|---|---|
+| `windows.h`, `avrt.h`, `bcrypt.h`, `mmsystem.h`, `psapi.h`, `tlhelp32.h`, `dbghelp.h`, `intrin.h` | the Win32 subset the runtime uses, LLP64 sizes |
+| `prelude.h` (force-included) | MS CRT names (`_wfopen`, `_strtoui64`), `std::atomic_ref` (the SDK's libc++ lacks it) |
+| `win32_core.cpp` | handles; threads (stacks reserved in direct memory, 1 MiB committed, grown by the fault handler); events, waitable timers, mutexes; SRW locks with real shared mode and their condition variables; WaitOnAddress; TLS; time (QPC at 10 MHz); UTF-8/UTF-32; topology |
+| `win32_memory.cpp` | VirtualAlloc/Free/Protect/Query on ps5platform ranges; page-file sections backed in 64 KiB direct-memory units, mapped into every view; per-4 KiB state table; console pages take the union of their 4 KiB protections |
+| `win32_fault.cpp` | vectored handlers and the unhandled filter on sigaction, CONTEXT ⇄ mcontext both ways, RaiseException |
+| `win32_files.cpp` | files on POSIX fds, attributes, rename, directories, module path `/app0/eboot.bin`, env, full paths, ini reads |
+
+Census with it: **61 of 72** non-graphics runtime files compile (was 30). The 11 left get PS5 back ends rather than compat:
+`audio_xaudio2`, `audio_devices` (XAudio2/MMDevice → sceAudioOut), `album` (WIC → stb_image_write), `swkbd_prompt` (a Win32
+window → the console's IME dialog), and the diagnostics that read other threads' registers or PE headers (`crash`, `sampler`,
+`watchdog`, `symbols`, `stackwalk`, `gauge`, `memguard`, `kernel/starvation_guard`) → signal-based crash record, frame-pointer
+stack walk, no sampling.
+
+Behaviour that differs from Windows, on purpose:
+- `SuspendThread`/`GetThreadContext` on another thread fail (`ERROR_NOT_SUPPORTED`); only the diagnostics above used them.
+- A 4 KiB page made read-only beside a writable one in the same 16 KiB console page stays writable. `mem/write_watch.cpp`
+  tracks 16 KiB pages on the console (`kPage` under `__PROSPERO__`), so its armed pages are never weakened this way.
+- `WaitForMultipleObjects` polls at 1 ms; `WakeConditionVariable` and `WakeByAddressSingle` wake every waiter.
+- `CreateFileMapping` supports page-file sections only (the runtime makes no file-backed ones).
+
 ## Approach
 
 1. **`ps5/compat/` — the Win32 subset the core uses, implemented on the console.** A `windows.h` stand-in on the include path for

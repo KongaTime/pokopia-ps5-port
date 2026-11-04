@@ -37,6 +37,12 @@
 
 namespace nxrt::mem::ww {
 
+#if defined(__PROSPERO__)
+// The console protects 16 KiB pages (ps5/compat/win32_memory.cpp): the tracker arms and releases whole ones, so every
+// write to an armed page faults into it, and releasing one page never unprotects a neighbour it still tracks.
+constexpr uint64_t kPage = 0x4000;
+#endif
+
 struct Region {
     uint64_t base = 0;          // address of page 0
     uint64_t npages = 0;
