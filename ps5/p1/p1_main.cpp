@@ -88,6 +88,45 @@ void notify(const char* text) {
 const Case* g_case = nullptr;
 const nxrt::Module* g_case_module = nullptr;
 
+int g_passed = 0;
+
+// The C++ ABI's typeinfo vtables (eh::TypeinfoVtables) of the current case's program. The runtime takes them from the
+// first module that defines them (discover_typeinfo_vtables), and every program here carries its own copies in its guest
+// runtime (tests/lift/guest/rt2.h): with another program's, its class typeinfos read as "unknown kind" and no derived-
+// to-base catch matched (19_eh_probe on the second console run).
+void use_case_typeinfo(const nxrt::Module& m) {
+    nxrt::eh::TypeinfoVtables v;
+    v.fundamental = m.find_symbol("_ZTVN10__cxxabiv123__fundamental_type_infoE");
+    v.array = m.find_symbol("_ZTVN10__cxxabiv117__array_type_infoE");
+    v.function = m.find_symbol("_ZTVN10__cxxabiv120__function_type_infoE");
+    v.enumeration = m.find_symbol("_ZTVN10__cxxabiv116__enum_type_infoE");
+    v.klass = m.find_symbol("_ZTVN10__cxxabiv117__class_type_infoE");
+    v.si_class = m.find_symbol("_ZTVN10__cxxabiv120__si_class_type_infoE");
+    v.vmi_class = m.find_symbol("_ZTVN10__cxxabiv121__vmi_class_type_infoE");
+    v.pointer = m.find_symbol("_ZTVN10__cxxabiv119__pointer_type_infoE");
+    v.pointer_to_member = m.find_symbol("_ZTVN10__cxxabiv129__pointer_to_member_type_infoE");
+    nxrt::eh::set_typeinfo_vtables(v);
+}
+
+// std::terminate in a guest program (the stub guest/rt2.h's terminate calls, hooked as upstream's driver does): none of
+// the programs here should reach it, so it is a failure that ends the run with what is known so far, instead of the
+// stub's own behaviour, which loops (second console run: the log grew without end).
+void on_terminate(::Ctx* c, const char* why) {
+    report("FAIL %s: std::terminate (%s)", g_case ? g_case->name : "?", why);
+    report("%s", nxrt::eh::guest_backtrace(c).c_str());
+    report("RESULT %d/%d passed (stopped at %s)", g_passed, kCount + 1, g_case ? g_case->name : "?");
+    nxrt::log_flush();
+    char text[96];
+    std::snprintf(text, sizeof text, "Pokopia P1 stopped: std::terminate in %s", g_case ? g_case->name : "?");
+    notify(text);
+    ExitProcess(3);
+}
+
+int terminate_hook(::Ctx* c, uint64_t, void*) {
+    nxrt::eh::terminate_process(c, "std::terminate called by the guest");
+    return 1;
+}
+
 // The calling guest thread's static TLS block, made for the current case's program (thread.cpp's layout: the 16-byte TCB,
 // the program's TLS image at tp_offset, at least a page; the thread pointer also kept at TLS region + 0x1F0).
 bool use_case_tls(::Ctx* c) {
@@ -204,6 +243,7 @@ uint32_t start_guest_thread(const char* name, uint64_t entry, uint64_t arg, uint
 bool run_case(const Case& c, nxrt::Module* m) {
     g_case = &c;
     g_case_module = m;
+    use_case_typeinfo(*m);
     g_test_main = m->find_symbol("test_main");
     g_results = m->find_symbol("results");
     if (!g_test_main || !g_results) {
@@ -308,16 +348,19 @@ int run() {
         struct { const char* sym; nxrt::SiteHookFn fn; } hooks[] = {
             {"_Unwind_RaiseException", nxrt::eh::hook_unwind_raise_exception},
             {"_Unwind_Resume", nxrt::eh::hook_unwind_resume},
+            {"nx_host_terminate", terminate_hook},
         };
         for (auto& h : hooks)
             if (uint64_t a = mods[i]->find_symbol(h.sym)) nxrt::hook_add_entry(a, h.fn);
     }
     nxrt::eh::discover_typeinfo_vtables();
+    nxrt::eh::set_terminate_handler(on_terminate);
 
     int passed = abi_ok ? 1 : 0;
     for (int i = 0; i < kCount; i++) {
         report("RUN %s", kCases[i].name);
         if (run_case(kCases[i], mods[i])) passed++;
+        g_passed = passed;
     }
     const nxrt::eh::Stats st = nxrt::eh::stats();
     report("eh: %llu raised, %llu caught, %llu cleanups, %llu uncaught", static_cast<unsigned long long>(st.raised),

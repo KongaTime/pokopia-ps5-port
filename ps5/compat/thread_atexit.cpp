@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// C++ thread_local destructors on the console.
+// Every thread the title starts: the IEEE floating-point state, and C++ thread_local destructors on the console.
 //
 // The C++ runtime registers them through __cxa_thread_atexit_impl, which the console's C library does not export: the
 // module converter refuses a title that imports it ("no public SDK stub exports required symbol"). This defines it.
@@ -47,9 +47,20 @@ struct Start {
     void *arg;
 };
 
+// The console starts threads with flush-to-zero and denormals-are-zero set in MXCSR (bits 15 and 6), as it starts a title;
+// _start clears them for the main thread only (title/fp_ieee.cpp). Code built here, the lifted guest code above all,
+// expects IEEE denormals: the second console run's 03_fp and 05_neon_fp_mem got -0.0 where AArch64 gives a denormal.
+void fp_ieee() {
+    unsigned int control;
+    __asm__ volatile("stmxcsr %0" : "=m"(control));
+    control &= ~0x8040u;
+    __asm__ volatile("ldmxcsr %0" : : "m"(control));
+}
+
 void *trampoline(void *p) {
     const Start s = *static_cast<Start *>(p);
     free(p);
+    fp_ieee();
     void *result = s.fn(s.arg);
     run_destructors();
     return result;
