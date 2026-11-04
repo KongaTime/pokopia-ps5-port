@@ -19,6 +19,7 @@ tool=${PS5_NATIVE_TOOL:-$vulkan/build/host/ps5-native-tool}
 work=${PKP_BUILD:-/home/kai/pkp-ps5-build}
 lift=${PKP_LIFT:-$work/game-lift}
 deps=${PKP_DEPS:-$work/deps}
+agc=${PKP_AGC_STUBS:-/mnt/c/kb/The-Darkness-Recomp/app/ps5/build/stubs}   # RADV imports AGC: link stubs (ps5/radv.cmake)
 build=$work/game
 tid=PPSA90006
 dist=$ps5/../dist/$tid
@@ -74,6 +75,7 @@ echo "==> [2/4] convert and sign"
 rm -rf "$dist"
 mkdir -p "$build/link" "$dist/sce_sys" "$dist/sce_module"
 "$tool" link --in "$build/pokopia_ps5" --out "$build/link/eboot.elf" --stub-dir "$sdk/target/lib" \
+    --stub "$agc/libSceAgc.so" --stub "$agc/libSceAgcDriver.so" \
     --module-sdk 0x02000009 --companion-sdk 0x08050001 --file-name eboot.elf
 "$tool" self --sign --in "$build/link/eboot.elf" --out "$dist/eboot.bin" --magic 0x1D3D154F
 "$tool" self --inspect --file "$dist/eboot.bin" | grep -E 'container|integrity'

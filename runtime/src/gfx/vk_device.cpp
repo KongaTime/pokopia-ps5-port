@@ -50,6 +50,10 @@ nxrt::GaugeCounter& vk_gauge_memory_bytes() { static nxrt::GaugeCounter g("vk.me
 
 }  // namespace nxrt
 
+#ifdef __PROSPERO__
+extern "C" VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vk_icdGetInstanceProcAddr(VkInstance, const char*);   // RADV (ps5/radv.cmake)
+#endif
+
 namespace nxrt::gfx {
 
 namespace {
@@ -344,8 +348,13 @@ bool Device::init(const DeviceDesc& desc, std::string* error) {
     std::string gpu_want = !desc.gpu.empty() ? desc.gpu : config_get_str("gfx", "gpu", "");
 
     // DLSS / DLAA: Streamline must see the instance, device and swapchain calls, so the loader functions come from sl.interposer.dll
+#ifdef __PROSPERO__
+    // The console has no Vulkan loader: RADV is linked into the title (ps5/radv.cmake) and is the instance's only driver.
+    volkInitializeCustom(vk_icdGetInstanceProcAddr);
+#else
     if (PFN_vkGetInstanceProcAddr sl_gipa = extras::streamline_preinit()) volkInitializeCustom(sl_gipa);
     else if (volkInitialize() != VK_SUCCESS) return fail("no Vulkan loader found (vulkan-1.dll)");
+#endif
     uint32_t inst_version = 0;
     vkEnumerateInstanceVersion(&inst_version);
     if (inst_version < VK_API_VERSION_1_3) return fail("Vulkan 1.3 is required; the loader offers less");

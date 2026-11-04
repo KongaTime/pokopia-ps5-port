@@ -17,13 +17,17 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <sys/stat.h>
 #include <thread>
 #include <unistd.h>
 
+#include <ps5platform/klog.h>
+
 #include "nxrt/config.h"
 #include "nxrt/dispatch.h"
+#include "nxrt/gfx.h"
 #include "nxrt/game.h"
 #include "nxrt/kernel.h"
 #include "nxrt/log.h"
@@ -31,6 +35,7 @@
 #include "nxrt/nvn.h"
 #include "nxrt/nvn_backend.h"
 #include "nxrt/nxmodule.h"
+#include "nxrt/platform.h"
 #include "nxrt/play.h"
 #include "nxrt/runtime.h"
 
@@ -62,6 +67,8 @@ const GameModule kModules[] = {
 };
 
 std::FILE* g_stage = nullptr;
+std::unique_ptr<nxrt::gfx::Device> g_gfx_device;
+std::unique_ptr<nxrt::gfx::Renderer> g_gfx_renderer;
 
 // One line per boot step in pkp-results/boot.txt, written before the step runs: a file that stops says where.
 void stage(const char* format, ...) {
@@ -105,6 +112,14 @@ void deadline(int seconds) {
     std::this_thread::sleep_for(std::chrono::seconds(seconds));
     NXLOG_W("boot", "max_seconds reached: the guest is still running; ending the run");
     NXLOG_I("boot", "state at the deadline:\n%s", nxrt::summary().c_str());
+    if (nxrt::nvn::backend_installed()) {
+        const nxrt::nvn::BackendStats b = nxrt::nvn::backend_stats();
+        stage("nvn: submits %llu draws %llu (skipped %llu) presents %llu pipelines %llu textures %llu (failed %llu)",
+              (unsigned long long)b.submits, (unsigned long long)b.draws, (unsigned long long)b.draws_skipped,
+              (unsigned long long)b.presents, (unsigned long long)b.pipelines_created, (unsigned long long)b.textures_created,
+              (unsigned long long)b.textures_failed);
+        NXLOG_I("boot", "nvn unsupported operations: %s", nxrt::nvn::backend_unsupported_report().c_str());
+    }
     nxrt::log_flush();
     stage("DEADLINE %d s: the guest was still running (state in pkp.log)", seconds);
     char text[96];
@@ -118,12 +133,15 @@ void deadline(int seconds) {
 int main() {
     nxrt_register_game_pkp();   // before anything reads it (nxrt::init, play mode, the services): docs/GAME_BOUNDARY.md
     mkdir(kOut, 0777);
+    // RADV and Mesa report on standard error (why vkCreateInstance fails, for one): into klog, as PS5_Vulkan's radv_smoke does.
+    ps5_klog_capture_stderr("[pkp:stderr] ");
     g_stage = std::fopen((std::string(kOut) + "/boot.txt").c_str(), "wb");
-    stage("pokopia-ps5 P2: the 2.0.1 game on the runtime, graphics off");
+    stage("pokopia-ps5 P3: the 2.0.1 game on the runtime, Vulkan through RADV");
     notify("Pokopia (P2) starting");
     // The title's sandbox refuses chdir into /app0 (first console run: "cannot enter the game folder"; Monado-PS5 only enters
     // /download0). So nothing relies on the working directory: every path the runtime would take relative to the game folder
     // gets /app0 here, unless pkp.ini names it.
+    stage("image: stage() at %p (link address of stage in the ELF gives the load bias)", reinterpret_cast<void*>(&stage));
     stage("chdir %s: %s", kGame, chdir(kGame) == 0 ? "ok" : "refused (absolute paths are used)");
 
     // Console defaults, as NXRT_* variables (the config reads the environment first, then the ini): set before nxrt::init,
@@ -142,7 +160,14 @@ int main() {
         {"NXRT_NVN_SHADER_ORDER", "/shader_order.txt"},
     };
     for (const auto& p : kPaths) setenv(p.env, (std::string(kGame) + p.path).c_str(), 0);
-    setenv("NXRT_BOOT_GFX", "none", 0);          // P2: no Vulkan device, NVN logging stubs
+    // P3: the NVN back end on RADV, in a window that is the console's video output (SDL3's ps5 driver: VK_KHR_display).
+    // [boot] gfx = none keeps P2's logging stubs.
+    setenv("NXRT_BOOT_GFX", "window", 0);
+    setenv("NXRT_GFX_VALIDATION", "0", 0);       // no validation layer on the console
+    setenv("SDL_VIDEO_DRIVER", "ps5", 0);
+    setenv("SDL_VIDEODRIVER", "ps5", 0);
+    // Mesa's shader disk cache: a writable folder (the default is under $HOME, which the console does not set).
+    setenv("MESA_SHADER_CACHE_DIR", (std::string(kGame) + "/mesa_cache").c_str(), 0);
     setenv("NXRT_LOG_LEVEL", "debug", 0);        // bring-up: the loader's map and protect steps
     // Bring-up: the compat layer's kernel calls, one line each (ps5/compat win32_internal.h crumb). The console ended the fourth
     // run with SYSTEM_ILLEGAL_FUNCTION_CALL and no signal; this file's last line names the call it refused.
@@ -164,8 +189,55 @@ int main() {
             nxrt::config_get_str("fs", "romfs", "").c_str(), nxrt::config_get_str("boot", "gfx", "").c_str());
 
     const bool nvn = nxrt::config_get_bool("boot", "nvn", true);
-    if (nvn) nxrt::nvn::install();   // nvnBootstrapLoader and the NVN entry points (logging stubs: no back end in P2)
-    {
+    if (nvn) nxrt::nvn::install();   // nvnBootstrapLoader and the NVN entry points (logging stubs for what no back end implements)
+    // The NVN back end (Vulkan through RADV), as game-build/src/pkp_main.cpp starts it on the PC.
+    bool play_started = false;
+    const std::string gfxmode = nxrt::config_get_str("boot", "gfx", "window");
+    if (nvn && gfxmode != "none") {
+        const bool headless = gfxmode != "window";
+        nxrt::play::DisplayConfig disp;
+        if (!headless) {
+            stage("STAGE window");
+            disp = nxrt::play::display();
+            if (!nxrt::platform::init()) die("the platform layer (SDL3) did not start (see pkp.log)");
+            nxrt::platform::WindowDesc wd;
+            wd.title = nxrt::game::info().title;
+            wd.width = disp.width;
+            wd.height = disp.height;
+            if (!nxrt::platform::create_window(wd)) die("cannot create the game window (see pkp.log)");
+        }
+        stage("STAGE vulkan device (%s)", gfxmode.c_str());
+        nxrt::gfx::DeviceDesc dd;
+        dd.headless = headless ? 1 : 0;
+        std::string err;
+        g_gfx_device = nxrt::gfx::Device::create(dd, &err);
+        if (!g_gfx_device) die("graphics device: %s", err.c_str());
+        stage("STAGE renderer on %s", g_gfx_device->gpu().name.c_str());
+        nxrt::gfx::RendererDesc rd;
+        rd.headless_width = 1280;
+        rd.headless_height = 720;
+        if (!headless) rd.present_mode = disp.present_mode;
+        g_gfx_renderer = nxrt::gfx::Renderer::create(*g_gfx_device, rd, &err);
+        if (!g_gfx_renderer) die("renderer: %s", err.c_str());
+        nxrt::nvn::BackendDesc bd;
+        bd.device = g_gfx_device.get();
+        bd.renderer = g_gfx_renderer.get();
+        if (!headless) {
+            bd.limiter = nxrt::play::limiter();
+            bd.keep_aspect = disp.keep_aspect;
+        }
+        if (!nxrt::nvn::install_backend(bd)) die("the NVN back end failed to start (see pkp.log)");
+        stage("STAGE nvn back end running");
+        NXLOG_I("boot", "NVN back end running on %s (%s)", g_gfx_device->gpu().name.c_str(), gfxmode.c_str());
+        nxrt::play::StartOptions po;
+        po.device = g_gfx_device.get();
+        po.renderer = g_gfx_renderer.get();
+        po.window = !headless;
+        po.overlay = false;
+        nxrt::play::start(po);
+        play_started = true;
+    }
+    if (!play_started) {
         nxrt::play::StartOptions po;   // no graphics: play mode still turns scripted keys into pad input
         po.overlay = false;
         nxrt::play::start(po);

@@ -87,7 +87,28 @@ int __wrap_pthread_create(pthread_t *thread, const pthread_attr_t *attr, void *(
     auto *s = static_cast<Start *>(malloc(sizeof(Start)));
     if (!s) return 12;   // ENOMEM
     *s = Start{fn, arg};
-    const int e = __real_pthread_create(thread, attr, trampoline, s);
+    // A thread that does not choose its stack (std::thread passes no attributes) gets 8 MiB, Linux's default: the
+    // console's default is far smaller, and the first P3 run's render thread overflowed it inside RADV's shader
+    // compiler (nir_opt_varyings, from vkCreateGraphicsPipelines). Threads with their own stack (the compat layer's,
+    // ps5_vrange) or an explicit size of 8 MiB or more keep theirs.
+    constexpr size_t kStack = size_t(8) << 20;
+    pthread_attr_t local;
+    const pthread_attr_t *use = attr;
+    bool own = false;
+    if (!attr) {
+        if (pthread_attr_init(&local) == 0) {
+            pthread_attr_setstacksize(&local, kStack);
+            use = &local;
+            own = true;
+        }
+    } else {
+        void *addr = nullptr;
+        size_t size = 0;
+        if (pthread_attr_getstack(attr, &addr, &size) == 0 && !addr && size < kStack)
+            pthread_attr_setstacksize(const_cast<pthread_attr_t *>(attr), kStack);
+    }
+    const int e = __real_pthread_create(thread, use, trampoline, s);
+    if (own) pthread_attr_destroy(&local);
     if (e != 0) free(s);
     return e;
 }

@@ -56,7 +56,17 @@ int __wrap_access(const char* path, int mode) { return ps5_access(path, mode); }
 char* __wrap_getcwd(char* buffer, size_t size) { return ps5_getcwd(buffer, size); }
 int __wrap_utimensat(int dir, const char* path, const struct timespec times[2], int flags) { return ps5_utimensat(dir, path, times, flags); }
 int __wrap_futimens(int fd, const struct timespec times[2]) { return ps5_futimens(fd, times); }
-long __wrap_sysconf(int name) { return ps5_sysconf(name); }
+// ps5_sysconf answers some names itself and passes the rest to sysconf, which this same --wrap sends back here: the
+// first P3 run (RADV asking for a page size) recursed until the stack ran out. The inner call goes to libc's.
+long __real_sysconf(int name);
+long __wrap_sysconf(int name) {
+    static thread_local bool inside = false;
+    if (inside) return __real_sysconf(name);
+    inside = true;
+    const long r = ps5_sysconf(name);
+    inside = false;
+    return r;
+}
 int __wrap_pthread_getaffinity_np(pthread_t t, size_t size, void* set) { return ps5_pthread_getaffinity_np(t, size, set); }
 int __wrap_pthread_setaffinity_np(pthread_t t, size_t size, const void* set) { return ps5_pthread_setaffinity_np(t, size, set); }
 int __wrap_mkstemp(char* path_template) { return ps5_mkstemp(path_template); }
