@@ -27,3 +27,5 @@ obj/
 .vs/
 .venv/
 __pycache__/
+# PS5 build output (ps5/p1/build.sh)
+/dist/

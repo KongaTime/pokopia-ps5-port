@@ -22,7 +22,7 @@ typedef int16_t SHORT;
 typedef uint32_t DWORD, ULONG, UINT, *PULONG, *LPDWORD, *PDWORD;
 typedef int32_t LONG, INT, NTSTATUS, HRESULT;
 typedef int64_t LONGLONG, LONG64, INT_PTR, LONG_PTR;
-typedef uint64_t ULONGLONG, DWORD64, ULONG64, DWORD_PTR, ULONG_PTR, UINT_PTR, SIZE_T, *PSIZE_T, *PULONG64, *PDWORD_PTR;
+typedef uint64_t ULONGLONG, DWORD64, ULONG64, DWORD_PTR, ULONG_PTR, UINT_PTR, SIZE_T, *PSIZE_T, *PULONG64, *PDWORD_PTR, *PDWORD64;
 typedef int64_t SSIZE_T;
 typedef void VOID, *PVOID, *LPVOID, *HANDLE, *HMODULE, *HINSTANCE, *HWND, *FARPROC;
 typedef const void *LPCVOID;
@@ -155,6 +155,9 @@ DWORD GetCurrentProcessorNumber();
 void GetCurrentProcessorNumberEx(PPROCESSOR_NUMBER number);
 HRESULT SetThreadDescription(HANDLE thread, LPCWSTR name);
 BOOL SetThreadPriorityBoost(HANDLE thread, BOOL disable);
+BOOL SetThreadStackGuarantee(PULONG size);
+BOOL GetThreadIdealProcessorEx(HANDLE thread, PPROCESSOR_NUMBER ideal);
+BOOL ReadProcessMemory(HANDLE process, LPCVOID address, LPVOID buffer, SIZE_T size, SIZE_T *read);
 DWORD SetThreadIdealProcessorEx(HANDLE thread, PPROCESSOR_NUMBER ideal, PPROCESSOR_NUMBER previous);
 BOOL GetProcessAffinityMask(HANDLE process, PDWORD_PTR process_mask, PDWORD_PTR system_mask);
 BOOL QueryThreadCycleTime(HANDLE thread, PULONG64 cycles);
@@ -493,6 +496,39 @@ HMODULE GetModuleHandleW(LPCWSTR name);
 #define GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS 0x4u
 BOOL GetModuleHandleExA(DWORD flags, LPCSTR name, HMODULE *module);
 FARPROC GetProcAddress(HMODULE module, LPCSTR name);
+HMODULE LoadLibraryA(LPCSTR name);   // the title loads no DLLs: always null (ERROR_MOD_NOT_FOUND)
+HMODULE LoadLibraryW(LPCWSTR name);
+BOOL FreeLibrary(HMODULE module);
+
+// PE headers: diag/symbols.cpp looks for the exe's CodeView record through GetModuleHandle(nullptr). The title's module
+// handle points at zeroed memory, so e_magic is never IMAGE_DOS_SIGNATURE and the lookup reports no record.
+#define IMAGE_DOS_SIGNATURE 0x5A4D
+#define IMAGE_NT_SIGNATURE 0x00004550
+#define IMAGE_DIRECTORY_ENTRY_DEBUG 6
+#define IMAGE_DEBUG_TYPE_CODEVIEW 2
+#define IMAGE_NUMBEROF_DIRECTORY_ENTRIES 16
+typedef struct _IMAGE_DOS_HEADER { WORD e_magic; WORD e_unused[29]; LONG e_lfanew; } IMAGE_DOS_HEADER;
+typedef struct _IMAGE_DATA_DIRECTORY { DWORD VirtualAddress; DWORD Size; } IMAGE_DATA_DIRECTORY;
+typedef struct _IMAGE_OPTIONAL_HEADER64 {
+    BYTE Fields[112];   // what precedes the data directories in the PE32+ optional header
+    IMAGE_DATA_DIRECTORY DataDirectory[IMAGE_NUMBEROF_DIRECTORY_ENTRIES];
+} IMAGE_OPTIONAL_HEADER64;
+typedef struct _IMAGE_FILE_HEADER { WORD Machine, NumberOfSections; DWORD TimeDateStamp, PointerToSymbolTable, NumberOfSymbols; WORD SizeOfOptionalHeader, Characteristics; } IMAGE_FILE_HEADER;
+typedef struct _IMAGE_NT_HEADERS64 { DWORD Signature; IMAGE_FILE_HEADER FileHeader; IMAGE_OPTIONAL_HEADER64 OptionalHeader; } IMAGE_NT_HEADERS64, IMAGE_NT_HEADERS;
+typedef struct _IMAGE_DEBUG_DIRECTORY {
+    DWORD Characteristics, TimeDateStamp;
+    WORD MajorVersion, MinorVersion;
+    DWORD Type, SizeOfData, AddressOfRawData, PointerToRawData;
+} IMAGE_DEBUG_DIRECTORY;
+static_assert(sizeof(IMAGE_DOS_HEADER) == 64, "IMAGE_DOS_HEADER layout");
+
+// Unwinding (diag/stackwalk.cpp): the console build keeps frame pointers (-fno-omit-frame-pointer), so the "function
+// entry" here is a frame record and RtlVirtualUnwind steps one frame up the rbp chain.
+#define UNW_FLAG_NHANDLER 0x0u
+typedef struct _RUNTIME_FUNCTION { DWORD BeginAddress, EndAddress, UnwindData; } RUNTIME_FUNCTION, *PRUNTIME_FUNCTION;
+PRUNTIME_FUNCTION RtlLookupFunctionEntry(DWORD64 pc, PDWORD64 image_base, void *history);
+void *RtlVirtualUnwind(DWORD type, DWORD64 image_base, DWORD64 pc, PRUNTIME_FUNCTION fn, PCONTEXT context,
+                       PVOID *handler_data, PDWORD64 establisher, void *pointers);
 DWORD GetEnvironmentVariableA(LPCSTR name, LPSTR out, DWORD size);
 DWORD GetCurrentDirectoryA(DWORD size, LPSTR out);
 void OutputDebugStringA(LPCSTR text);

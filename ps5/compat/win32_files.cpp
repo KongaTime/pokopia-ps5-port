@@ -47,7 +47,9 @@ BOOL fail_errno() {
 }
 
 constexpr char kModulePath[] = "/app0/eboot.bin";
-const char kModuleTag = 0;   // GetModuleHandle(nullptr): an address in the title's image
+// GetModuleHandle(nullptr): zeroed memory in the title's image, large enough for the PE header reads diag/symbols.cpp makes
+// before it sees there is no 'MZ'.
+alignas(16) const char kModuleTag[512] = {};
 
 uint64_t filetime_of(const timespec &ts) {
     return (uint64_t(ts.tv_sec) + 11644473600ull) * 10000000ull + uint64_t(ts.tv_nsec) / 100;
@@ -254,7 +256,7 @@ BOOL CreateDirectoryW(const char *path, void *) { return make_dir(native_path(pa
 // the title's own module
 
 DWORD GetModuleFileNameA(HMODULE module, LPSTR out, DWORD size) {
-    if (module && module != reinterpret_cast<HMODULE>(const_cast<char *>(&kModuleTag))) {
+    if (module && module != reinterpret_cast<HMODULE>(const_cast<char *>(kModuleTag))) {
         SetLastError(ERROR_INVALID_HANDLE);
         return 0;
     }
@@ -279,7 +281,7 @@ DWORD GetModuleFileNameW(HMODULE module, LPWSTR out, DWORD size) {
 
 HMODULE GetModuleHandleA(LPCSTR name) {
     // The title is one module: there are no system DLLs to find (ntdll and the like answer null, as an absent DLL does).
-    if (!name) return reinterpret_cast<HMODULE>(const_cast<char *>(&kModuleTag));
+    if (!name) return reinterpret_cast<HMODULE>(const_cast<char *>(kModuleTag));
     SetLastError(126);   // ERROR_MOD_NOT_FOUND
     return nullptr;
 }
