@@ -126,7 +126,26 @@ int main() {
     // gets /app0 here, unless pkp.ini names it.
     stage("chdir %s: %s", kGame, chdir(kGame) == 0 ? "ok" : "refused (absolute paths are used)");
 
-    // /app0/pkp.ini, when there is one, sets anything below; the console defaults follow it.
+    // Console defaults, as NXRT_* variables (the config reads the environment first, then the ini): set before nxrt::init,
+    // because the services take some of them during init (fsp-srv logged RomFS 'game/romfs' on the second run when they
+    // were set after it). A variable already set wins (setenv with overwrite 0); being variables, these also win over
+    // /app0/pkp.ini, which sets every other key.
+    const struct { const char* env; const char* path; } kPaths[] = {
+        {"NXRT_FS_ROMFS", "/romfs"},
+        {"NXRT_FS_EXEFS", "/exefs"},
+        // Saves: Windows puts them under %APPDATA%\<save_folder>\save (services/common.cpp save_dir); the console has no
+        // APPDATA, and the default would be a relative path with backslashes.
+        {"NXRT_FS_SAVE_DIR", "/save"},
+        {"NXRT_PLAY_CONTROLS", "/controls.ini"},
+        {"NXRT_NVN_PIPELINE_CACHE", "/pipeline_cache.bin"},
+        {"NXRT_NVN_PIPELINE_KEYS", "/pipeline_keys.bin"},
+        {"NXRT_NVN_SHADER_ORDER", "/shader_order.txt"},
+    };
+    for (const auto& p : kPaths) setenv(p.env, (std::string(kGame) + p.path).c_str(), 0);
+    setenv("NXRT_BOOT_GFX", "none", 0);          // P2: no Vulkan device, NVN logging stubs
+    setenv("NXRT_LOG_LEVEL", "debug", 0);        // bring-up: the loader's map and protect steps
+
+    // /app0/pkp.ini, when there is one, sets anything else.
     const std::string ini = std::string(kGame) + "/pkp.ini";
     nxrt::InitOptions opt;
     const std::string log = std::string(kOut) + "/pkp.log";
@@ -135,20 +154,6 @@ int main() {
     opt.load_symbols = false;
     stage("STAGE runtime init");
     if (!nxrt::init(opt)) die("runtime start-up failed (address-space layout)");
-    const struct { const char* section; const char* key; const char* path; } kPaths[] = {
-        {"fs", "romfs", "/romfs"},
-        {"fs", "exefs", "/exefs"},
-        // Saves: Windows puts them under %APPDATA%\<save_folder>\save (services/common.cpp save_dir); the console has no
-        // APPDATA, and the default would be a relative path with backslashes.
-        {"fs", "save_dir", "/save"},
-        {"play", "controls", "/controls.ini"},
-        {"nvn", "pipeline_cache", "/pipeline_cache.bin"},
-        {"nvn", "pipeline_keys", "/pipeline_keys.bin"},
-        {"nvn", "shader_order", "/shader_order.txt"},
-    };
-    for (const auto& p : kPaths)
-        if (!nxrt::config_has(p.section, p.key)) nxrt::config_set(p.section, p.key, (std::string(kGame) + p.path).c_str());
-    if (!nxrt::config_has("boot", "gfx")) nxrt::config_set("boot", "gfx", "none");
     const std::string exefs = nxrt::config_get_str("fs", "exefs", "/app0/exefs");
     nxrt::config_set("fs", "exefs", exefs.c_str());
     nxrt::config_set("process", "program_id", "0x0400A3A01EE4C000");

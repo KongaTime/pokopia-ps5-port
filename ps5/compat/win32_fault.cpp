@@ -36,7 +36,9 @@ std::atomic<Handlers *> g_handlers{new Handlers};
 std::atomic<LPTOP_LEVEL_EXCEPTION_FILTER> g_filter{nullptr};
 std::mutex g_install_mu;
 bool g_installed = false;
-constexpr int kSignals[] = {SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGTRAP};
+// SIGSYS: the console ends a title with it for a system call the title may not make; reported here like an illegal
+// instruction, so the runtime's crash reporter records where it came from.
+constexpr int kSignals[] = {SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGTRAP, SIGSYS};
 struct sigaction g_previous[sizeof kSignals / sizeof kSignals[0]];
 
 thread_local sigjmp_buf *t_guard = nullptr;   // the innermost seh_guard of this thread
@@ -103,7 +105,7 @@ void on_signal(int sig, siginfo_t *info, void *uctx) {
             rec.ExceptionInformation[1] = reinterpret_cast<ULONG_PTR>(info ? info->si_addr : nullptr);
             break;
         }
-        case SIGILL: rec.ExceptionCode = EXCEPTION_ILLEGAL_INSTRUCTION; break;
+        case SIGILL: case SIGSYS: rec.ExceptionCode = EXCEPTION_ILLEGAL_INSTRUCTION; break;
         case SIGFPE: rec.ExceptionCode = EXCEPTION_INT_DIVIDE_BY_ZERO; break;
         default: rec.ExceptionCode = EXCEPTION_BREAKPOINT; break;
     }

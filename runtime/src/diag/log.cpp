@@ -17,7 +17,11 @@ namespace {
 
 constexpr size_t kMaxMessage = 2000;     // longer messages are cut to this many bytes and get "..."
 constexpr size_t kFormatBuffer = 4096;   // vsnprintf target; anything longer is cut anyway
+#if defined(__PROSPERO__)
+constexpr unsigned kFlushEvery = 1;      // the console can end a title without a signal the process sees: every line reaches the file
+#else
 constexpr unsigned kFlushEvery = 100;    // lines between flushes for Info and below
+#endif
 constexpr char kLevelLetters[] = "EWIDT";
 constexpr int kLevelCount = 5;
 
