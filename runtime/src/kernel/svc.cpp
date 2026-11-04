@@ -187,6 +187,10 @@ struct GameSvcTimer {
 void svc_set_busy_hook(void (*fn)()) { g_busy_hook.store(fn, std::memory_order_release); }
 
 void svc_dispatch(::Ctx* c, uint32_t number, uint64_t pc) {
+#if defined(__PROSPERO__)
+    // Bring-up: the call is logged at its end; a console that ends the title inside one leaves this line instead.
+    ps5compat::crumb("svc %#x x0 %#llx x1 %#llx", number, static_cast<unsigned long long>(c->x[0]), static_cast<unsigned long long>(c->x[1]));
+#endif
     GameSvcTimer game_timer(number);
     if (kernel::KThread* self = kernel::current_thread()) self->last_proc.store(static_cast<int>(GetCurrentProcessorNumber()), std::memory_order_relaxed);   // the starvation line
     if (auto fn = g_busy_hook.load(std::memory_order_relaxed)) fn();

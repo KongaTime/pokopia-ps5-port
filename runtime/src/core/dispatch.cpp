@@ -310,6 +310,9 @@ void dispatch_call(::Ctx* c, uint64_t addr) {
         t.calls.fetch_add(1, std::memory_order_relaxed);
         const char* saved = t_hle_name;
         t_hle_name = t.name.c_str();
+#if defined(__PROSPERO__)
+        ps5compat::crumb("hle %s", t_hle_name);   // bring-up: see svc_dispatch
+#endif
         // [hle] trace: the line is written after the handler ran, so it carries the result (x0) next to the arguments
         const HleTrace& tr = hle_trace();
         const bool traced = !tr.prefix.empty() && t.name.compare(0, tr.prefix.size(), tr.prefix) == 0;

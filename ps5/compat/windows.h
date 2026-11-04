@@ -405,6 +405,8 @@ typedef LPTOP_LEVEL_EXCEPTION_FILTER PTOP_LEVEL_EXCEPTION_FILTER;
 // gone (the graphics shell's texture hashing reads the game's storage) runs the read through seh_guard instead: false when
 // an access fault in it reached no vectored handler that resumed it (the fault handler jumps back out of the guarded call).
 namespace ps5compat {
+// Bring-up breadcrumbs (win32_internal.h): a line in $NXRT_PS5_BREADCRUMBS, nothing when it is unset.
+void crumb(const char *format, ...) __attribute__((format(printf, 1, 2)));
 bool seh_guard_call(void (*fn)(void *), void *arg);
 template <class F>
 bool seh_guard(F &&f) {
