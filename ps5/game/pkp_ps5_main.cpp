@@ -121,22 +121,35 @@ int main() {
     g_stage = std::fopen((std::string(kOut) + "/boot.txt").c_str(), "wb");
     stage("pokopia-ps5 P2: the 2.0.1 game on the runtime, graphics off");
     notify("Pokopia (P2) starting");
-    if (chdir(kGame) != 0) die("cannot enter the game folder %s", kGame);
+    // The title's sandbox refuses chdir into /app0 (first console run: "cannot enter the game folder"; Monado-PS5 only enters
+    // /download0). So nothing relies on the working directory: every path the runtime would take relative to the game folder
+    // gets /app0 here, unless pkp.ini names it.
+    stage("chdir %s: %s", kGame, chdir(kGame) == 0 ? "ok" : "refused (absolute paths are used)");
 
-    // pkp.ini in the game folder, when there is one, sets anything below; the console defaults follow it.
+    // /app0/pkp.ini, when there is one, sets anything below; the console defaults follow it.
+    const std::string ini = std::string(kGame) + "/pkp.ini";
     nxrt::InitOptions opt;
     const std::string log = std::string(kOut) + "/pkp.log";
-    opt.ini_path = file_exists("pkp.ini") ? "pkp.ini" : "";
+    opt.ini_path = file_exists(ini) ? ini.c_str() : "";
     opt.log_path = log.c_str();
     opt.load_symbols = false;
     stage("STAGE runtime init");
     if (!nxrt::init(opt)) die("runtime start-up failed (address-space layout)");
-    if (!nxrt::config_has("fs", "romfs")) nxrt::config_set("fs", "romfs", "romfs");
-    // Saves: Windows puts them under %APPDATA%\<save_folder>\save (services/common.cpp save_dir); the console has no APPDATA,
-    // and the default would be a relative path with backslashes. The title folder is the console's writable place.
-    if (!nxrt::config_has("fs", "save_dir")) nxrt::config_set("fs", "save_dir", "/app0/save");
+    const struct { const char* section; const char* key; const char* path; } kPaths[] = {
+        {"fs", "romfs", "/romfs"},
+        {"fs", "exefs", "/exefs"},
+        // Saves: Windows puts them under %APPDATA%\<save_folder>\save (services/common.cpp save_dir); the console has no
+        // APPDATA, and the default would be a relative path with backslashes.
+        {"fs", "save_dir", "/save"},
+        {"play", "controls", "/controls.ini"},
+        {"nvn", "pipeline_cache", "/pipeline_cache.bin"},
+        {"nvn", "pipeline_keys", "/pipeline_keys.bin"},
+        {"nvn", "shader_order", "/shader_order.txt"},
+    };
+    for (const auto& p : kPaths)
+        if (!nxrt::config_has(p.section, p.key)) nxrt::config_set(p.section, p.key, (std::string(kGame) + p.path).c_str());
     if (!nxrt::config_has("boot", "gfx")) nxrt::config_set("boot", "gfx", "none");
-    const std::string exefs = nxrt::config_get_str("fs", "exefs", "exefs");
+    const std::string exefs = nxrt::config_get_str("fs", "exefs", "/app0/exefs");
     nxrt::config_set("fs", "exefs", exefs.c_str());
     nxrt::config_set("process", "program_id", "0x0400A3A01EE4C000");
     NXLOG_I("boot", "Pokémon Pokopia %s on the PS5: exefs '%s', romfs '%s', graphics '%s'", nxrt::game::info().version, exefs.c_str(),
