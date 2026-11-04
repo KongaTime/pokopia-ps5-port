@@ -66,8 +66,10 @@ if [[ ${1:-} == --deploy ]]; then
     for d in /data/homebrew "/data/homebrew/$tid" "/data/homebrew/$tid/sce_sys" "/data/homebrew/$tid/sce_module" "/data/homebrew/$tid/tests"; do
         curl -s --max-time 15 -u anonymous: -Q "MKD $d" "$ftp/" >/dev/null || true
     done
-    for f in sce_sys/param.json sce_sys/icon0.png sce_module/libc.prx tests/*; do
-        ( cd "$dist" && for g in $f; do [[ -f $g ]] && curl -s --max-time 120 -u anonymous: -T "$g" "$ftp/data/homebrew/$tid/$(dirname "$g")/" >/dev/null; done )
+    # Paths relative to the title folder (a glob here must expand there, not in the caller's directory).
+    ( cd "$dist" && find sce_sys sce_module tests -type f | sort ) | while read -r g; do
+        curl -sS --max-time 120 -u anonymous: -T "$dist/$g" "$ftp/data/homebrew/$tid/$(dirname "$g")/" >/dev/null ||
+            fail "upload of $g failed"
     done
     # eboot.bin last: the title is not launchable until its main binary is there.
     curl -s --max-time 300 -u anonymous: -T "$dist/eboot.bin" "$ftp/data/homebrew/$tid/" >/dev/null
