@@ -244,6 +244,7 @@ using namespace ps5compat;
 // VirtualAlloc / VirtualFree / VirtualProtect / VirtualQuery
 
 LPVOID VirtualAlloc(LPVOID address, SIZE_T size, DWORD type, DWORD protect) {
+    crumb("VirtualAlloc %p %#llx type %#x prot %#x", address, static_cast<unsigned long long>(size), type, protect);
     const uint64_t addr = reinterpret_cast<uint64_t>(address);
     if (!size || !(type & (MEM_RESERVE | MEM_COMMIT)) || !valid_protect(protect) || addr >= kLimit || size > kLimit - addr) {
         SetLastError(ERROR_INVALID_PARAMETER);
@@ -291,6 +292,7 @@ LPVOID VirtualAlloc(LPVOID address, SIZE_T size, DWORD type, DWORD protect) {
 }
 
 BOOL VirtualFree(LPVOID address, SIZE_T size, DWORD type) {
+    crumb("VirtualFree %p %#llx type %#x", address, static_cast<unsigned long long>(size), type);
     const uint64_t addr = reinterpret_cast<uint64_t>(address);
     std::lock_guard lk(g_mu);
     Alloc *a = alloc_at(addr);
@@ -329,6 +331,7 @@ BOOL VirtualFree(LPVOID address, SIZE_T size, DWORD type) {
 }
 
 BOOL VirtualProtect(LPVOID address, SIZE_T size, DWORD protect, PDWORD old_protect) {
+    crumb("VirtualProtect %p %#llx prot %#x", address, static_cast<unsigned long long>(size), protect);
     const uint64_t addr = reinterpret_cast<uint64_t>(address);
     if (!size || !valid_protect(protect) || addr >= kLimit || size > kLimit - addr) {
         SetLastError(ERROR_INVALID_PARAMETER);
@@ -462,6 +465,7 @@ HANDLE CreateFileMappingA(HANDLE file, void *security, DWORD protect, DWORD size
 }
 
 LPVOID MapViewOfFileEx(HANDLE mapping, DWORD access, DWORD offset_high, DWORD offset_low, SIZE_T size, LPVOID address) {
+    crumb("MapViewOfFileEx off %#llx size %#llx at %p", static_cast<unsigned long long>((uint64_t(offset_high) << 32) | offset_low), static_cast<unsigned long long>(size), address);
     auto *s = as<Section>(mapping, Object::Kind::Section);
     if (!s) return nullptr;
     const uint64_t off = (uint64_t(offset_high) << 32) | offset_low;
@@ -512,6 +516,7 @@ LPVOID MapViewOfFile(HANDLE mapping, DWORD access, DWORD offset_high, DWORD offs
 }
 
 BOOL UnmapViewOfFile(LPCVOID view) {
+    crumb("UnmapViewOfFile %p", view);
     const uint64_t base = reinterpret_cast<uint64_t>(view);
     Section *s = nullptr;
     {

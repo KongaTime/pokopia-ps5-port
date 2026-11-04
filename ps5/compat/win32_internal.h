@@ -67,4 +67,10 @@ void fault_install();
 // is committed now).
 bool stack_grow(uint64_t address);
 
+// Bring-up breadcrumbs: one line per compat call that reaches the console's kernel (threads, priorities, affinity, memory,
+// stacks, faults), appended with write() to $NXRT_PS5_BREADCRUMBS when that names a file. The console ends a title for a
+// call it refuses (SYSTEM_ILLEGAL_FUNCTION_CALL) without a signal the title sees; the file's last line is the call.
+// Written data outlives the process, so no fsync. Off (one load, one branch) when the variable is unset.
+void crumb(const char* format, ...) __attribute__((format(printf, 1, 2)));
+
 }  // namespace ps5compat

@@ -144,6 +144,9 @@ int main() {
     for (const auto& p : kPaths) setenv(p.env, (std::string(kGame) + p.path).c_str(), 0);
     setenv("NXRT_BOOT_GFX", "none", 0);          // P2: no Vulkan device, NVN logging stubs
     setenv("NXRT_LOG_LEVEL", "debug", 0);        // bring-up: the loader's map and protect steps
+    // Bring-up: the compat layer's kernel calls, one line each (ps5/compat win32_internal.h crumb). The console ended the fourth
+    // run with SYSTEM_ILLEGAL_FUNCTION_CALL and no signal; this file's last line names the call it refused.
+    setenv("NXRT_PS5_BREADCRUMBS", (std::string(kOut) + "/calls.txt").c_str(), 0);
 
     // /app0/pkp.ini, when there is one, sets anything else.
     const std::string ini = std::string(kGame) + "/pkp.ini";

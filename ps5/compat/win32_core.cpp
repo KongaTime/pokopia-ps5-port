@@ -8,12 +8,14 @@
 #include <ps5platform/shm.h>
 
 #include <errno.h>
+#include <fcntl.h>
 #include <pthread_np.h>
 #include <sched.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 #include <algorithm>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <map>
@@ -101,6 +103,7 @@ Stack *stack_alloc(uint64_t size) {
     if (!free_slot) return nullptr;
     size = (size + 0xFFFF) & ~uint64_t{0xFFFF};
     void *base = nullptr;
+    crumb("stack reserve %#llx", static_cast<unsigned long long>(size));
     if (ps5_vrange_reserve(size, nullptr, 0x10000, &base) != 0) return nullptr;
     const uint64_t lo = reinterpret_cast<uint64_t>(base), hi = lo + size;
     const uint64_t first = hi - std::min<uint64_t>(kStackInitial, size);
@@ -248,6 +251,7 @@ void *thread_main(void *arg) {
     t_tid = t->id;
     t_self = t;
     t_guard.t = t;   // the reference CreateThread gave the thread itself
+    crumb("thread start id %u", t->id);
     fault_thread_init();
     pthread_mutex_lock(&t->mu);
     while (t->suspend > 0) pthread_cond_wait(&t->cv, &t->mu);
@@ -387,6 +391,23 @@ std::map<std::string, Mutex *> g_named;
 // ---------------------------------------------------------------------------------------------------------------------
 // shared helpers (win32_internal.h)
 
+void crumb(const char* format, ...) {
+    static const int fd = [] {
+        const char* path = getenv("NXRT_PS5_BREADCRUMBS");
+        return path && *path ? open(path, O_WRONLY | O_CREAT | O_TRUNC | O_APPEND | O_CLOEXEC, 0666) : -1;
+    }();
+    if (fd < 0) return;
+    char line[256];
+    int n = std::snprintf(line, sizeof line, "%llu t%u ", static_cast<unsigned long long>(now_ns() / 1000), current_tid());
+    va_list a;
+    va_start(a, format);
+    n += std::vsnprintf(line + n, sizeof line - static_cast<size_t>(n) - 1, format, a);
+    va_end(a);
+    if (n > static_cast<int>(sizeof line) - 2) n = sizeof line - 2;
+    line[n++] = '\n';
+    (void)write(fd, line, static_cast<size_t>(n));
+}
+
 bool stack_grow(uint64_t address) {
     for (Stack &s : g_stacks) {
         const uint64_t hi = s.hi.load(std::memory_order_acquire);
@@ -398,6 +419,7 @@ bool stack_grow(uint64_t address) {
         uint64_t from = (address & ~(kStackStep - 1));
         if (from <= lo) from = lo + 0x4000;
         if (address < from) return false;
+        crumb("stack grow %#llx-%#llx", static_cast<unsigned long long>(from), static_cast<unsigned long long>(committed));
         if (ps5_vrange_commit(reinterpret_cast<void *>(from), committed - from,
                               PS5_KERNEL_PROT_CPU_READ | PS5_KERNEL_PROT_CPU_WRITE) != 0)
             return false;
@@ -570,6 +592,7 @@ HANDLE CreateThread(void *, SIZE_T stack, LPTHREAD_START_ROUTINE start, LPVOID p
             pthread_attr_setstacksize(&attr, std::max<size_t>(stack, 256 * 1024));
         }
     }
+    crumb("CreateThread id %u stack %#llx", t->id, static_cast<unsigned long long>(stack));
     const int e = pthread_create(&t->pt, &attr, thread_main, t);
     pthread_attr_destroy(&attr);
     if (e != 0) {
@@ -636,6 +659,7 @@ BOOL SetThreadPriority(HANDLE thread, int priority) {
     Thread *t = thread_of(thread);
     if (!t) return FALSE;
     t->priority = priority;
+    crumb("SetThreadPriority id %u win %d console %d", t->id, priority, console_priority(priority));
     (void)scePthreadSetprio(t->pt, console_priority(priority));   // best effort, as on Windows without the privilege
     return TRUE;
 }
@@ -659,6 +683,7 @@ DWORD_PTR SetThreadAffinityMask(HANDLE thread, DWORD_PTR mask) {
     }
     uint64_t old = 0;
     if (scePthreadGetaffinity(t->pt, &old) != 0) old = process_mask();
+    crumb("SetThreadAffinityMask id %u mask %#llx usable %#llx", t->id, static_cast<unsigned long long>(mask), static_cast<unsigned long long>(usable));
     if (scePthreadSetaffinity(t->pt, usable) != 0) {
         SetLastError(ERROR_INVALID_PARAMETER);
         return 0;
