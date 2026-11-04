@@ -118,10 +118,16 @@ struct StripeLock {
     ~StripeLock() { s.store(false, std::memory_order_release); }
 };
 
+// Section memory (file mappings: the guest heap) keeps GPU read and write whatever its CPU protection: the NVN back end
+// imports it into Vulkan as host memory (VK_EXT_external_memory_host), which on the console is RADV giving the pages GPU
+// access with sceKernelMprotect; a CPU-only protection set later (VirtualProtect, the runtime's write watch) would take
+// that away and fault the GPU.
+constexpr int kGpuRW = PS5_KERNEL_PROT_GPU_READ | PS5_KERNEL_PROT_GPU_WRITE;
+
 // No access is refused on some direct memory: read-only is the nearest the console gives (ps5platform does the same).
 void protect_page(uint64_t page, int bits) {
-    if (sceKernelMprotect(reinterpret_cast<void *>(page), kConsolePage, bits) != 0 && bits == 0)
-        sceKernelMprotect(reinterpret_cast<void *>(page), kConsolePage, PS5_KERNEL_PROT_CPU_READ);
+    if (sceKernelMprotect(reinterpret_cast<void *>(page), kConsolePage, bits) != 0 && !(bits & ~kGpuRW))
+        sceKernelMprotect(reinterpret_cast<void *>(page), kConsolePage, PS5_KERNEL_PROT_CPU_READ | bits);
 }
 
 // Recomputes and sets the console protection of every backed console page in [start, end) that holds a committed 4 KiB
@@ -136,7 +142,7 @@ void apply(uint64_t start, uint64_t end) {
             const uint8_t e = get(a);
             if (state_of(e) == kCommitted && backed_of(e)) {
                 any = true;
-                bits |= console_bits(prot_of(e));
+                bits |= console_bits(prot_of(e)) | (view_of(e) ? kGpuRW : 0);
             }
         }
         if (any) protect_page(p, bits);
@@ -193,7 +199,7 @@ bool map_unit(Section &s, size_t unit, const Alloc &v) {
     if (unit_off + kUnit <= v.offset || unit_off >= v.offset + v.size) return true;   // not in this view
     const uint64_t lo = std::max(unit_off, v.offset), hi = std::min(unit_off + kUnit, v.offset + v.size);
     void *at = reinterpret_cast<void *>(v.base + (lo - v.offset));
-    const int r = sceKernelMapDirectMemory(&at, up(hi - lo, kConsolePage), PS5_KERNEL_PROT_CPU_READ | PS5_KERNEL_PROT_CPU_WRITE,
+    const int r = sceKernelMapDirectMemory(&at, up(hi - lo, kConsolePage), PS5_KERNEL_PROT_CPU_READ | PS5_KERNEL_PROT_CPU_WRITE | kGpuRW,
                                            PS5_KERNEL_MAP_FIXED, s.units[unit] + int64_t(lo - unit_off), 0);
     return r == 0;
 }
@@ -227,7 +233,7 @@ bool back_unit(Section &s, size_t u) {
         }
         for (uint64_t p = a; p < b; p += kConsolePage) {
             StripeLock sl(p);
-            protect_page(p, 0);
+            protect_page(p, kGpuRW);
         }
         mark_backed(a, b, true);
         apply(a, b);

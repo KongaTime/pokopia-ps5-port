@@ -26,6 +26,10 @@
 #include "nvn_gpu_internal.h"
 #include "nvn_mirror_cap.h"
 
+#ifdef __PROSPERO__
+namespace ps5compat { void touch(const void* p, size_t n); }   // ps5/compat/win32_memory.cpp
+#endif
+
 namespace nxrt::nvn::be {
 
 namespace gpu { struct Mirror; }
@@ -118,6 +122,11 @@ bool import_range(PoolGpu* g, PoolChunk& c, uint64_t off, uint64_t size, const c
         }
     }
 
+#ifdef __PROSPERO__
+    // The console's compat layer backs section memory on first touch (ps5/compat/win32_memory.cpp), and the GPU does
+    // not touch it the CPU way: every page of the range gets its memory before the driver pins it.
+    ps5compat::touch(import_ptr, size);
+#endif
     VkMemoryHostPointerPropertiesEXT hp = {VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT};
     VkResult r;
     const auto tm0 = std::chrono::steady_clock::now();
