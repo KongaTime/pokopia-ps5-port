@@ -54,6 +54,11 @@ function(ps5_title target)
         -nostartfiles                # app_crt.cpp's _start takes the console's process parameters
         -Wl,--wrap=realpath -Wl,--wrap=printf -Wl,--wrap=vprintf -Wl,--wrap=puts -Wl,--wrap=putchar
         -Wl,--wrap=pthread_create -Wl,--wrap=pthread_exit   # thread_local destructors (compat/thread_atexit.cpp)
+        # The heap in direct memory (ps5platform/heap.h): the console's libc heap is about 400 MiB of flexible memory, and the
+        # game's loader alone needs more (the second P2 run ended reading main's 29 MB NSO into a vector, no error logged).
+        -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc -Wl,--wrap=free -Wl,--wrap=posix_memalign
+        -Wl,--wrap=aligned_alloc -Wl,--wrap=memalign -Wl,--wrap=malloc_usable_size -Wl,--wrap=reallocf
+        -Wl,--wrap=reallocarray -Wl,--wrap=getline -Wl,--wrap=getdelim
         -Wl,--exclude-libs=ALL -Wl,--eh-frame-hdr -Wl,--build-id=none
         -Wl,--no-dependent-libraries # the runtime's #pragma comment(lib, "avrt.lib") and the like name Windows libraries
         "-Wl,-T,${CMAKE_CURRENT_SOURCE_DIR}/title/ps5-pie.ld")
