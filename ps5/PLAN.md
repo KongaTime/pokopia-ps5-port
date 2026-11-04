@@ -94,7 +94,7 @@ Behaviour that differs from Windows, on purpose:
 | | Pass condition |
 |---|---|
 | P0 | Census of all of `runtime/src` (gfx included) recorded, compat layer compiles the 72 core files |
-| P1 | Title runs nxrt's lifted test programs (`runtime/tests/lift/progs`) on the console and writes their results to `/data` — recompiled AArch64 executing on PS5 through nxrt, no game needed |
+| P1 | Title runs nxrt's lifted test programs (`runtime/tests/lift/progs`) on the console and writes their results to `/data` — recompiled AArch64 executing on PS5 through nxrt, no game needed. **Built and signed** (`ps5/p1/`, `dist/PPSA90002`); not yet run on a console |
 | P2 | Title boots Pokopia 2.0.1 to its first NVN present (log line) with audio/movies stubbed |
 | P3 | First frame on screen through RADV; DualSense input |
 | P4 | Audio, movies, saves; PS5 launcher (Prepare/Play/Settings) like Monado-PS5 |
