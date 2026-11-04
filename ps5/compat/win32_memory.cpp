@@ -41,15 +41,21 @@ uint64_t down(uint64_t v, uint64_t a) { return v & ~(a - 1); }
 uint64_t up(uint64_t v, uint64_t a) { return (v + a - 1) & ~(a - 1); }
 
 // ---- the page table ----
-// Entry: bits 0-1 state (0 free, 1 reserved, 2 committed), bits 2-4 protection code, bit 5 part of a view.
+// Entry: bits 0-1 state (0 free, 1 reserved, 2 committed), bits 2-4 protection code, bit 5 part of a view, bit 6 backed
+// (memory is mapped there). Private memory is backed when committed; a view's page only once its section unit is (on
+// first touch: section_fault), so a committed page can be unbacked, and then reads as committed but has nothing mapped.
 enum : uint8_t { kFree = 0, kReserved = 1, kCommitted = 2 };
 enum : uint8_t { kNone = 0, kR = 1, kRW = 2, kRX = 3, kRWX = 4 };
 constexpr uint8_t kViewBit = 0x20;
+constexpr uint8_t kBackedBit = 0x40;
 
-uint8_t entry(uint8_t state, uint8_t prot, bool view) { return uint8_t(state | prot << 2 | (view ? kViewBit : 0)); }
+uint8_t entry(uint8_t state, uint8_t prot, bool view, bool backed) {
+    return uint8_t(state | prot << 2 | (view ? kViewBit : 0) | (backed ? kBackedBit : 0));
+}
 uint8_t state_of(uint8_t e) { return e & 3; }
 uint8_t prot_of(uint8_t e) { return (e >> 2) & 7; }
 bool view_of(uint8_t e) { return (e & kViewBit) != 0; }
+bool backed_of(uint8_t e) { return (e & kBackedBit) != 0; }
 
 uint8_t *g_leaves[kLimit / kLeafSpan];
 
@@ -118,8 +124,9 @@ void protect_page(uint64_t page, int bits) {
         sceKernelMprotect(reinterpret_cast<void *>(page), kConsolePage, PS5_KERNEL_PROT_CPU_READ);
 }
 
-// Recomputes and sets the console protection of every console page in [start, end) that holds a committed 4 KiB page:
-// the union of their protections. Pages with none committed keep what they have (reserved, or no access).
+// Recomputes and sets the console protection of every backed console page in [start, end) that holds a committed 4 KiB
+// page: the union of their protections. Pages with none committed keep what they have (reserved, or no access); pages
+// with nothing mapped yet get theirs when they are backed.
 void apply(uint64_t start, uint64_t end) {
     for (uint64_t p = down(start, kConsolePage); p < up(end, kConsolePage); p += kConsolePage) {
         StripeLock lk(p);
@@ -127,7 +134,7 @@ void apply(uint64_t start, uint64_t end) {
         bool any = false;
         for (uint64_t a = p; a < p + kConsolePage; a += kWinPage) {
             const uint8_t e = get(a);
-            if (state_of(e) == kCommitted) {
+            if (state_of(e) == kCommitted && backed_of(e)) {
                 any = true;
                 bits |= console_bits(prot_of(e));
             }
@@ -191,51 +198,97 @@ bool map_unit(Section &s, size_t unit, const Alloc &v) {
     return r == 0;
 }
 
-// Commits section pages [off, end) seen through view `by` with `prot`; other views get their own access.
-bool section_commit(Section &s, uint64_t off, uint64_t end, const Alloc &by, uint8_t prot) {
-    for (uint64_t u = off / kUnit; u < up(end, kUnit) / kUnit; ++u) {
-        if (s.units[u] >= 0) continue;
-        int64_t phys = 0;
-        if (sceKernelAllocateDirectMemory(0, sceKernelGetDirectMemorySize(), kUnit, kUnit, 0, &phys) != 0) {
-            SetLastError(ERROR_COMMITMENT_LIMIT);
-            return false;
-        }
-        s.units[u] = phys;
-        for (Alloc *v : s.views) {
-            if (!map_unit(s, u, *v)) {
-                SetLastError(ERROR_NOT_ENOUGH_MEMORY);
-                return false;
-            }
-        }
-        // Released direct memory comes back with its old contents: a new unit is zeroed once, through any view of it.
-        for (Alloc *v : s.views) {
-            const uint64_t uo = u * kUnit;
-            if (uo >= v->offset && uo + kUnit <= v->offset + v->size) {
-                memset(reinterpret_cast<void *>(v->base + (uo - v->offset)), 0, kUnit);
-                break;
-            }
-        }
-        // Its pages are uncommitted until committed, in every view: no access, as a reservation.
-        for (Alloc *v : s.views) {
-            const uint64_t lo = std::max(u * kUnit, v->offset), hi = std::min(u * kUnit + kUnit, v->offset + v->size);
-            for (uint64_t a = v->base + (lo - v->offset); lo < hi && a < v->base + (hi - v->offset); a += kConsolePage) {
-                StripeLock sl(a);
-                protect_page(a, 0);
-            }
-        }
+// Sets or clears the backed bit of the pages [start, end), keeping their state and protection.
+void mark_backed(uint64_t start, uint64_t end, bool backed) {
+    for (uint64_t a = start; a < end; a += kWinPage) {
+        uint8_t *slot = &leaf(a, true)[(a % kLeafSpan) / kWinPage];
+        const uint8_t e = __atomic_load_n(slot, __ATOMIC_ACQUIRE);
+        __atomic_store_n(slot, uint8_t(backed ? (e | kBackedBit) : (e & ~kBackedBit)), __ATOMIC_RELEASE);
     }
-    for (uint64_t p = off / kWinPage; p < end / kWinPage; ++p) s.committed[p] = 1;
+}
+
+// Gives a section unit its direct memory (g_mu held): allocated, mapped into every view, zeroed (released direct memory
+// comes back with its old contents), its pages' recorded protections applied (uncommitted ones no access).
+bool back_unit(Section &s, size_t u) {
+    if (s.units[u] >= 0) return true;
+    int64_t phys = 0;
+    if (sceKernelAllocateDirectMemory(0, sceKernelGetDirectMemorySize(), kUnit, kUnit, 0, &phys) != 0) return false;
+    s.units[u] = phys;
+    for (Alloc *v : s.views)
+        if (!map_unit(s, u, *v)) return false;
+    bool zeroed = false;
     for (Alloc *v : s.views) {
-        const uint64_t lo = std::max(off, v->offset), hi = std::min(end, v->offset + v->size);
+        const uint64_t lo = std::max<uint64_t>(u * kUnit, v->offset), hi = std::min<uint64_t>(u * kUnit + kUnit, v->offset + v->size);
         if (lo >= hi) continue;
         const uint64_t a = v->base + (lo - v->offset), b = v->base + (hi - v->offset);
-        set_range(a, b, entry(kCommitted, v == &by ? prot : v->access, true));
+        if (!zeroed && lo == u * kUnit && hi == u * kUnit + kUnit) {
+            memset(reinterpret_cast<void *>(a), 0, kUnit);
+            zeroed = true;
+        }
+        for (uint64_t p = a; p < b; p += kConsolePage) {
+            StripeLock sl(p);
+            protect_page(p, 0);
+        }
+        mark_backed(a, b, true);
         apply(a, b);
     }
     return true;
 }
 
+// Commits section pages [off, end) seen through view `by` with `prot`; other views get their own access. As on Windows,
+// a SEC_RESERVE commit charges nothing yet: each 64 KiB unit gets its memory when a page of it is first touched
+// (section_fault) or handed to the kernel (touch). Committing gigabytes is then a table update, where backing them at
+// once took about 40 s of the P2 boot and held the console's direct memory before the game had used any of it.
+bool section_commit(Section &s, uint64_t off, uint64_t end, const Alloc &by, uint8_t prot) {
+    for (uint64_t p = off / kWinPage; p < end / kWinPage; ++p) s.committed[p] = 1;
+    for (Alloc *v : s.views) {
+        const uint64_t lo = std::max(off, v->offset), hi = std::min(end, v->offset + v->size);
+        if (lo >= hi) continue;
+        for (uint64_t x = lo; x < hi;) {   // unit by unit: each run's backed bit follows its unit
+            const uint64_t u = x / kUnit, y = std::min<uint64_t>(hi, (u + 1) * kUnit);
+            const uint64_t a = v->base + (x - v->offset), b = v->base + (y - v->offset);
+            set_range(a, b, entry(kCommitted, v == &by ? prot : v->access, true, s.units[u] >= 0));
+            if (s.units[u] >= 0) apply(a, b);
+            x = y;
+        }
+    }
+    return true;
+}
+
+// The section unit behind a committed, unbacked view page at addr (g_mu held): true when it was backed now.
+bool back_view_page(uint64_t addr) {
+    const uint8_t e = get(addr);
+    if (state_of(e) != kCommitted || !view_of(e) || backed_of(e)) return false;
+    Alloc *v = alloc_at(addr);
+    if (!v || !v->section) return false;
+    return back_unit(*v->section, (v->offset + (addr - v->base)) / kUnit);
+}
+
 }  // namespace
+
+bool section_fault(uint64_t addr) {
+    if (state_of(get(addr)) != kCommitted || !view_of(get(addr))) return false;   // not a view page: no lock taken
+    std::lock_guard lk(g_mu);
+    back_view_page(addr);
+    const uint8_t e = get(addr);   // backed now, or by another thread that faulted on the same unit first
+    return state_of(e) == kCommitted && view_of(e) && backed_of(e);
+}
+
+void touch(const void *p, size_t n) {
+    if (!n) return;
+    const uint64_t a = reinterpret_cast<uint64_t>(p);
+    if (a >= kLimit) return;
+    const uint64_t end = std::min<uint64_t>(a + n, kLimit);
+    bool locked = false;
+    for (uint64_t q = down(a, kWinPage); q < end; q += kWinPage) {
+        const uint8_t e = get(q);
+        if (state_of(e) != kCommitted || !view_of(e) || backed_of(e)) continue;
+        if (!locked) { g_mu.lock(); locked = true; }
+        back_view_page(q);
+    }
+    if (locked) g_mu.unlock();
+}
+
 }  // namespace ps5compat
 
 using namespace ps5compat;
@@ -265,7 +318,7 @@ LPVOID VirtualAlloc(LPVOID address, SIZE_T size, DWORD type, DWORD protect) {
             return nullptr;
         }
         g_allocs[base] = Alloc{base, span, nullptr, 0, kRW};
-        set_range(base, base + span, entry(kReserved, kNone, false));
+        set_range(base, base + span, entry(kReserved, kNone, false, false));
         if (!(type & MEM_COMMIT)) return reinterpret_cast<LPVOID>(base);   // rounded down to 64 KiB, as Windows does
     }
     const uint64_t start = down(addr ? addr : base, kWinPage);
@@ -286,7 +339,7 @@ LPVOID VirtualAlloc(LPVOID address, SIZE_T size, DWORD type, DWORD protect) {
         SetLastError(ERROR_COMMITMENT_LIMIT);
         return nullptr;
     }
-    set_range(start, end, entry(kCommitted, prot, false));
+    set_range(start, end, entry(kCommitted, prot, false, true));
     apply(start, end);
     return reinterpret_cast<LPVOID>(start);
 }
@@ -310,7 +363,7 @@ BOOL VirtualFree(LPVOID address, SIZE_T size, DWORD type) {
             SetLastError(ERROR_INVALID_ADDRESS);
             return FALSE;
         }
-        set_range(base, base + span, entry(kFree, kNone, false));
+        set_range(base, base + span, entry(kFree, kNone, false, false));
         g_allocs.erase(base);
         return TRUE;
     }
@@ -322,7 +375,7 @@ BOOL VirtualFree(LPVOID address, SIZE_T size, DWORD type) {
             return FALSE;
         }
         ps5_vrange_decommit(reinterpret_cast<void *>(start), end - start);
-        set_range(start, end, entry(kReserved, kNone, false));
+        set_range(start, end, entry(kReserved, kNone, false, false));
         apply(start, end);   // console pages shared with still-committed 4 KiB pages get their protection back
         return TRUE;
     }
@@ -346,7 +399,7 @@ BOOL VirtualProtect(LPVOID address, SIZE_T size, DWORD protect, PDWORD old_prote
         }
     if (old_protect) *old_protect = protect_of(prot_of(get(start)));
     const uint8_t prot = code_of(protect);
-    for (uint64_t a = start; a < end; a += kWinPage) set_range(a, a + kWinPage, entry(kCommitted, prot, view_of(get(a))));
+    for (uint64_t a = start; a < end; a += kWinPage) set_range(a, a + kWinPage, entry(kCommitted, prot, view_of(get(a)), backed_of(get(a))));
     apply(start, end);
     return TRUE;
 }
@@ -449,6 +502,7 @@ HANDLE CreateFileMappingW(HANDLE file, void *, DWORD protect, DWORD size_high, D
         SetLastError(ERROR_INVALID_PARAMETER);
         return nullptr;
     }
+    fault_install();   // section pages are backed on first touch, through the fault handler
     auto *s = new Section;
     s->size = size;
     s->units.assign(size / kUnit, -1);
@@ -487,7 +541,7 @@ LPVOID MapViewOfFileEx(HANDLE mapping, DWORD access, DWORD offset_high, DWORD of
     Alloc &v = it->second;
     retain(s);   // a view keeps its section
     s->views.push_back(&v);
-    set_range(base, base + span, entry(kReserved, kNone, true));
+    set_range(base, base + span, entry(kReserved, kNone, true, false));
     for (size_t u = off / kUnit; u < up(off + size, kUnit) / kUnit; ++u)
         if (s->units[u] >= 0 && !map_unit(*s, u, v)) {
             SetLastError(ERROR_NOT_ENOUGH_MEMORY);
@@ -503,7 +557,9 @@ LPVOID MapViewOfFileEx(HANDLE mapping, DWORD access, DWORD offset_high, DWORD of
             for (uint64_t k = p; k < q; ++k) s->committed[k] = 0;
             if (!section_commit(*s, p * kWinPage, q * kWinPage, v, v.access)) return nullptr;
         } else {
-            set_range(base + (p * kWinPage - off), base + (q * kWinPage - off), entry(kCommitted, v.access, true));
+            for (uint64_t k = p; k < q; ++k)   // backed where the section unit already has memory
+                set_range(base + (k * kWinPage - off), base + ((k + 1) * kWinPage - off),
+                          entry(kCommitted, v.access, true, s->units[k * kWinPage / kUnit] >= 0));
             apply(base + (p * kWinPage - off), base + (q * kWinPage - off));
         }
         p = q;
@@ -529,7 +585,7 @@ BOOL UnmapViewOfFile(LPCVOID view) {
         s = it->second.section;
         const uint64_t span = it->second.size;
         ps5_vrange_release(reinterpret_cast<void *>(base), span);   // the direct-memory mappings in it go too
-        set_range(base, base + span, entry(kFree, kNone, false));
+        set_range(base, base + span, entry(kFree, kNone, false, false));
         s->views.erase(std::remove(s->views.begin(), s->views.end(), &it->second), s->views.end());
         g_allocs.erase(it);
     }

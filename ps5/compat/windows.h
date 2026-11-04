@@ -408,6 +408,9 @@ namespace ps5compat {
 // Bring-up breadcrumbs (win32_internal.h): a line in $NXRT_PS5_BREADCRUMBS, nothing when it is unset.
 void crumb(const char *format, ...) __attribute__((format(printf, 1, 2)));
 bool seh_guard_call(void (*fn)(void *), void *arg);
+// Backs any committed section pages in [p, p + n) that have no memory yet (they are backed on first touch, which the
+// kernel does not do for a buffer handed to it: read() into one fails with EFAULT instead).
+void touch(const void *p, size_t n);
 template <class F>
 bool seh_guard(F &&f) {
     return seh_guard_call([](void *p) { (*static_cast<F *>(p))(); }, &f);

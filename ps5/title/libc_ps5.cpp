@@ -10,7 +10,17 @@
 #include <ps5platform/libc.h>
 
 #include <cstdarg>
+#include <cstdio>
+#include <unistd.h>
 #include <fcntl.h>
+
+// compat/win32_memory.cpp's, in titles that link the compat layer (weak: the others have no sections to back).
+namespace ps5compat {
+void touch(const void* p, size_t n) __attribute__((weak));
+}
+static inline void touch(const void* p, size_t n) {
+    if (ps5compat::touch) ps5compat::touch(p, n);
+}
 
 extern "C" {
 
@@ -65,5 +75,32 @@ int __wrap_clock_nanosleep(clockid_t clock, int flags, const struct timespec* re
 }
 long __wrap_pathconf(const char* path, int name) { return ps5_pathconf(path, name); }
 pid_t __wrap_fork(void) { return ps5_fork(); }
+
+// Committed section memory (the guest heap) is backed on first touch through the fault handler, which the kernel does
+// not raise for a buffer handed to it: read() into an untouched page fails with EFAULT. These back the buffer first.
+ssize_t __real_read(int fd, void* buffer, size_t size);
+ssize_t __real_pread(int fd, void* buffer, size_t size, off_t offset);
+ssize_t __real_write(int fd, const void* buffer, size_t size);
+ssize_t __real_pwrite(int fd, const void* buffer, size_t size, off_t offset);
+size_t __real_fread(void* buffer, size_t size, size_t count, FILE* f);
+size_t __real_fwrite(const void* buffer, size_t size, size_t count, FILE* f);
+ssize_t __wrap_read(int fd, void* buffer, size_t size) { touch(buffer, size); return __real_read(fd, buffer, size); }
+ssize_t __wrap_pread(int fd, void* buffer, size_t size, off_t offset) {
+    touch(buffer, size);
+    return __real_pread(fd, buffer, size, offset);
+}
+ssize_t __wrap_write(int fd, const void* buffer, size_t size) { touch(buffer, size); return __real_write(fd, buffer, size); }
+ssize_t __wrap_pwrite(int fd, const void* buffer, size_t size, off_t offset) {
+    touch(buffer, size);
+    return __real_pwrite(fd, buffer, size, offset);
+}
+size_t __wrap_fread(void* buffer, size_t size, size_t count, FILE* f) {
+    touch(buffer, size * count);
+    return __real_fread(buffer, size, count, f);
+}
+size_t __wrap_fwrite(const void* buffer, size_t size, size_t count, FILE* f) {
+    touch(buffer, size * count);
+    return __real_fwrite(buffer, size, count, f);
+}
 
 }  // extern "C"

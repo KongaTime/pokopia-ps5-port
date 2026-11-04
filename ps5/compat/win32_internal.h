@@ -67,6 +67,10 @@ void fault_install();
 // is committed now).
 bool stack_grow(uint64_t address);
 
+// Section memory is backed on first touch (win32_memory.cpp): the fault handler calls this after stack_grow, and resumes
+// the thread when it returns true (addr is in a committed view page whose unit has its memory now).
+bool section_fault(uint64_t address);
+
 // Bring-up breadcrumbs: one line per compat call that reaches the console's kernel (threads, priorities, affinity, memory,
 // stacks, faults), appended with write() to $NXRT_PS5_BREADCRUMBS when that names a file. The console ends a title for a
 // call it refuses (SYSTEM_ILLEGAL_FUNCTION_CALL) without a signal the title sees; the file's last line is the call.

@@ -32,8 +32,9 @@ What the eight runs found and fixed
      (clock_nanosleep, from compat's waitable timer)              pathconf, fork wrapped; ps5/tools/rawsys.sh finds none
                                                                   called now (233 stubs in the image, 0 with callers)
 
-Known slow spot
----------------
-  The heap commit takes about 40 s: ps5/compat/win32_memory.cpp backs and zeroes every 64 KiB unit of a section at
-  commit time (Windows only reserves charge then and backs pages on first touch). To do: back section units on first
-  touch from the fault handler.
+Heap commit (ninth run)
+-----------------------
+  The heap commit took about 40 s: ps5/compat/win32_memory.cpp backed and zeroed every 64 KiB unit of a section at
+  commit time. Section units are now backed on first touch (the fault handler's section_fault, and touch() for buffers
+  handed to the kernel by read/pread/write/pwrite/fread/fwrite). The same boot reaches the vi CreateLayer loop and the
+  game's own svcExitProcess at 6.0 s instead of 45.7 s.
