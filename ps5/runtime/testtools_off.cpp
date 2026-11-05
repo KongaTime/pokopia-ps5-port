@@ -37,4 +37,5 @@ bool read_mem(uint64_t addr, void* out, size_t n) {
 }
 }  // namespace detail
 
+void (*wait_shot_writes)() = nullptr;   // tt_core.cpp (set by vk_renderer.cpp; nothing waits on it with the tools off)
 }  // namespace nxrt::tt

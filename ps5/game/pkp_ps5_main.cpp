@@ -119,6 +119,7 @@ bool file_exists(const std::string& p) {
 namespace ps5compat { void crumb_dump(); }   // compat/win32_core.cpp
 extern "C" const char* nxrt_render_where();
 bool pkp_ps5_pad_init();   // game/pad_ps5.cpp
+void pkp_ps5_start_trap();   // game/write_trap.cpp
 extern "C" const char* SDL_GetError(void);   // runtime/src/gfx/vk_renderer.cpp
 namespace {
 void memory_monitor() {
@@ -232,6 +233,11 @@ void watch_words(std::vector<uint64_t> addrs) {
             const uint64_t v = __atomic_load_n(reinterpret_cast<const uint64_t*>(a), __ATOMIC_RELAXED);
             if (v != last[i]) {
                 NXLOG_I("watch", "%llx: %llx -> %llx", (unsigned long long)a, (unsigned long long)last[i], (unsigned long long)v);
+                if (v == 0 && last[i] != ~0ull && last[i] != 0) {   // cleared: where every guest thread is right now
+                    for (const auto& t : nxrt::kernel::threads())
+                        if (t) NXLOG_I("watch", "  %s fn %llx lr %llx x0 %llx", t->name.c_str(), (unsigned long long)t->ctx.fn,
+                                       (unsigned long long)t->ctx.x[30], (unsigned long long)t->ctx.x[0]);
+                }
                 last[i] = v;
             }
         }
@@ -509,6 +515,7 @@ int main() {
 
     trace_fs_mounts();
     start_watch();
+    pkp_ps5_start_trap();
 
     // 3. link: the game's own rtld relocates ([boot] link = rtld), or the runtime's linker ([boot] link = host)
     stage("STAGE link (%s)", nxrt::config_get_str("boot", "link", "rtld").c_str());

@@ -90,4 +90,14 @@ public:
 };
 }  // namespace std
 #endif
+
+// MSVC's CPUID intrinsics (<intrin.h>), which the runtime's SHA-NI check (nvn_shaders.cpp) calls. User code may run CPUID on the
+// console. Not clang's <cpuid.h>, whose __cpuid is a macro of another shape.
+#if !defined(_MSC_VER) && !defined(PS5COMPAT_CPUID)
+#define PS5COMPAT_CPUID
+static inline void __cpuidex(int r[4], int leaf, int sub) {
+    __asm__ volatile("cpuid" : "=a"(r[0]), "=b"(r[1]), "=c"(r[2]), "=d"(r[3]) : "a"(leaf), "c"(sub));
+}
+static inline void __cpuid(int r[4], int leaf) { __cpuidex(r, leaf, 0); }
+#endif
 #endif

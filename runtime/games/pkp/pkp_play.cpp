@@ -539,7 +539,18 @@ void pick_size(const play::DisplaySettings& d, int window_w, int window_h, int* 
 
 }  // namespace
 
-void play_install_render(uint64_t base, const play::DisplaySettings& d, int window_w, int window_h) {
+void play_install_render(uint64_t base, const play::DisplaySettings& d_in, int window_w, int window_h) {
+#ifdef __PROSPERO__
+    // The console's video output is 3840x2160, and sizing the game's targets from it (4K) made the game leave its main loop after one
+    // frame (it supports up to its docked 1920x1080). Without a size chosen in controls.ini, the targets are 1920x1080 there.
+    play::DisplaySettings d = d_in;
+    if (d.render_width <= 0 || d.render_height <= 0) {
+        d.render_width = 1920;
+        d.render_height = 1080;
+    }
+#else
+    const play::DisplaySettings& d = d_in;
+#endif
     State& s = st();
     if (s.render_installed) return;
     s.base = base;

@@ -124,8 +124,9 @@ if(PKP_LIFT AND PKP_DEPS)
     set_target_properties(ps5_sdl3 PROPERTIES IMPORTED_LOCATION "${PKP_SDL3_LIB}" INTERFACE_INCLUDE_DIRECTORIES "${PKP_SDL3_INCLUDE}")
 
     file(GLOB_RECURSE PS5_GFX_SOURCES CONFIGURE_DEPENDS "${ROOT}/runtime/src/gfx/*.cpp")
-    list(FILTER PS5_GFX_SOURCES EXCLUDE REGEX "(nvn_gpu_stub|temporal_dlss|win_display)[.]cpp$")
-    add_library(nxrt_gfx STATIC ${PS5_GFX_SOURCES} "${CMAKE_CURRENT_SOURCE_DIR}/gfx/astc2bc7_off.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/gfx/gfx_ps5.cpp")
+    list(FILTER PS5_GFX_SOURCES EXCLUDE REGEX "(nvn_gpu_stub|temporal_dlss|win_display|nvn_shader_worker)[.]cpp$")   # shader worker: gfx/shader_worker_off.cpp
+    add_library(nxrt_gfx STATIC ${PS5_GFX_SOURCES} "${CMAKE_CURRENT_SOURCE_DIR}/gfx/astc2bc7_off.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/gfx/gfx_ps5.cpp"
+                "${CMAKE_CURRENT_SOURCE_DIR}/gfx/shader_worker_off.cpp")
     target_include_directories(nxrt_gfx PUBLIC "${ROOT}/runtime/include" "${ROOT}/runtime/src/gfx/nvn/third_party" "${ROOT}/tools/textures/include"
                                "${PKP_DEPS}/vma/include"
                                PRIVATE "${ROOT}/runtime/src" "${ROOT}/runtime/src/gfx" "${ROOT}/runtime/src/gfx/nvn")
@@ -143,6 +144,11 @@ if(PKP_LIFT AND PKP_DEPS)
                                PRIVATE "${ROOT}/runtime/src" "${ROOT}/runtime/src/gfx" "${ROOT}/runtime/src/gfx/play" "${ROOT}/runtime/src/testtools")
     target_compile_options(nxrt_game_pkp PRIVATE -O2 -g1 -w -fno-omit-frame-pointer "SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/compat/endian_fix.h")
     target_link_libraries(nxrt_game_pkp PUBLIC nxrt_gfx)
+    # Identity and file names from the game manifest (recomp/games/pkp/game.toml), as runtime/games/pkp/CMakeLists.txt makes them.
+    include("${ROOT}/recomp/cmake/GameManifest.cmake")
+    game_manifest_load("${ROOT}/recomp/games/pkp/game.toml")
+    game_manifest_header("${CMAKE_BINARY_DIR}/pkp_gen/game_manifest.h")
+    target_include_directories(nxrt_game_pkp PRIVATE "${CMAKE_BINARY_DIR}/pkp_gen")
 
     # The title (P2: ps5/game/pkp_ps5_main.cpp)
     add_executable(pokopia_ps5 "${CMAKE_CURRENT_SOURCE_DIR}/game/pkp_ps5_main.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/game/pad_ps5.cpp")
@@ -151,6 +157,8 @@ if(PKP_LIFT AND PKP_DEPS)
                           ScePad SceAudioOut SceUserService SceSystemService SceNet)
     ps5_title(pokopia_ps5)
     target_link_options(pokopia_ps5 PRIVATE -Wl,--wrap=f_7101fdcde0 -Wl,--wrap=f_7101fe00a0)   # bring-up: main-loop job trace
+    target_sources(pokopia_ps5 PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/game/loop_trace.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/game/write_trap.cpp")   # bring-up: main-loop callee trace
+    target_link_options(pokopia_ps5 PRIVATE -Wl,--wrap=f_7101fdb040 -Wl,--wrap=f_71009fc100 -Wl,--wrap=f_7101fd9448 -Wl,--wrap=f_7101fd9440 -Wl,--wrap=f_7101fdd700 -Wl,--wrap=f_7101ffaca0 -Wl,--wrap=f_710069ed3c -Wl,--wrap=f_7100234140 -Wl,--wrap=f_7102045420 -Wl,--wrap=f_7101ff1c44 -Wl,--wrap=f_7101fdd6b4 -Wl,--wrap=f_7101fdcf20 -Wl,--wrap=f_7101ff1d60 -Wl,--wrap=f_7101ff1fe0 -Wl,--wrap=f_7101fdd6bc -Wl,--wrap=f_7102045a60 -Wl,--wrap=f_7101ff1f7c -Wl,--wrap=f_7101fdd6c0)
     include("${CMAKE_CURRENT_SOURCE_DIR}/radv.cmake")   # P3: Vulkan on the console (RADV)
     ps5_radv(pokopia_ps5)
 endif()
