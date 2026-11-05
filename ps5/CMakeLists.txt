@@ -150,6 +150,7 @@ if(PKP_LIFT AND PKP_DEPS)
     target_link_libraries(pokopia_ps5 PRIVATE pkp_main pkp_sdk pkp_subsdk0 pkp_rtld nxrt_game_pkp nxrt_gfx nxrt
                           ScePad SceAudioOut SceUserService SceSystemService SceNet)
     ps5_title(pokopia_ps5)
+    target_link_options(pokopia_ps5 PRIVATE -Wl,--wrap=f_7101fdcde0 -Wl,--wrap=f_7101fe00a0)   # bring-up: main-loop job trace
     include("${CMAKE_CURRENT_SOURCE_DIR}/radv.cmake")   # P3: Vulkan on the console (RADV)
     ps5_radv(pokopia_ps5)
 endif()

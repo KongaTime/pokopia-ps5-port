@@ -4,6 +4,11 @@
 // to its subsystem: nx_site_inline / nx_site_midhook / nx_hook_entry in hooks.cpp, nx_catch_call in eh/catch_call.cpp, and the
 // registration of the lifted module tables (NxModule) in nxmodule.cpp.
 // Pattern from smo-recomp runtime/core/hostrt.c (host_import with in_import bookkeeping, stx_diag, guest_trap / guest_unimpl).
+#include "nxrt/config.h"
+#include <string>
+#include <cstdlib>
+#include <atomic>
+#include <chrono>
 #include <windows.h>
 
 #include <cstdio>
@@ -26,7 +31,47 @@ std::set<uint32_t> g_sysregs_seen;
 
 extern "C" {
 
-void call_indirect(Ctx* c, uint64_t addr) { nxrt::dispatch_call(c, addr); }
+// [diag] trace_indirect = "lo,hi[,max]" (NXRT_DIAG_TRACE_INDIRECT): every indirect call made from a guest function whose address is
+// in [lo, hi) is logged with its call site, target and the x0 it returns (at most max lines, default 400). Bring-up: which virtual call
+// of a code path answers what, without a re-lift for mid hooks.
+namespace {
+struct IndirectTrace {
+    uint64_t lo = 0, hi = 0;
+    int max = 400;
+    uint64_t after_ns = 0;   // [diag] trace_indirect_after_ms: nothing logged before then (from the first indirect call)
+};
+const IndirectTrace& indirect_trace() {
+    static const IndirectTrace t = [] {
+        IndirectTrace r;
+        const std::string v = nxrt::config_get_str("diag", "trace_indirect", "");
+        if (v.empty()) return r;
+        char* end = nullptr;
+        r.lo = std::strtoull(v.c_str(), &end, 0);
+        if (end && *end == ',') r.hi = std::strtoull(end + 1, &end, 0);
+        if (end && *end == ',') r.max = static_cast<int>(std::strtol(end + 1, nullptr, 0));
+        r.after_ns = static_cast<uint64_t>(nxrt::config_get_int("diag", "trace_indirect_after_ms", 0)) * 1000000ull;
+        return r;
+    }();
+    return t;
+}
+std::atomic<int> g_indirect_lines{0};
+}  // namespace
+
+void call_indirect(Ctx* c, uint64_t addr) {
+    const IndirectTrace& t = indirect_trace();
+    static const auto t0 = std::chrono::steady_clock::now();
+    if (t.hi && c->fn >= t.lo && c->fn < t.hi && g_indirect_lines.load(std::memory_order_relaxed) < t.max &&
+        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count()) >= t.after_ns) {
+        const uint64_t from = c->fn, lr = c->x[30], a0 = c->x[0], a1 = c->x[1], a2 = c->x[2];
+        nxrt::dispatch_call(c, addr);
+        g_indirect_lines.fetch_add(1, std::memory_order_relaxed);
+        NXLOG_I("indirect", "%llx (lr %llx) -> %llx (x0 %llx x1 %llx x2 %llx) returned x0 %llx", (unsigned long long)from, (unsigned long long)lr,
+                (unsigned long long)addr, (unsigned long long)a0, (unsigned long long)a1, (unsigned long long)a2, (unsigned long long)c->x[0]);
+        c->fn = from;
+        return;
+    }
+    nxrt::dispatch_call(c, addr);
+}
 
 // A call to a symbol another module provides: the lifted PLT stub passes NX_IMPORT_ID(module index, symbol index) of its own
 // module. The registry (nxmodule.cpp) names the import and finds its target: a function another lifted module defines, else the HLE

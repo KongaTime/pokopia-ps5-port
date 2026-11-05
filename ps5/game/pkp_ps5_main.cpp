@@ -18,6 +18,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <array>
+#include <atomic>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -171,6 +172,51 @@ constexpr std::array<nxrt::GuestFn, sizeof...(I)> traced_table(std::integer_sequ
     return {&traced<I>...};
 }
 
+// Bring-up: the main loop's job lookup (f_7101fdcde0) and run (f_7101fe00a0), wrapped at link time (ps5/CMakeLists.txt) and
+// logged when the main loop or its job call makes them (the loop ended after one frame on a run that returned 0).
+extern "C" void __real_f_7101fdcde0(::Ctx* c);
+extern "C" void __real_f_7101fe00a0(::Ctx* c);
+extern "C" void __wrap_f_7101fdcde0(::Ctx* c) {
+    const uint64_t lr = c->x[30], a0 = c->x[0], a1 = c->x[1];
+    __real_f_7101fdcde0(c);
+    if (lr == 0x7100882d88ull || lr == 0x7100882db4ull) {
+        static std::atomic<int> n{0};
+        if (n.fetch_add(1) < 40) NXLOG_I("jobtrace", "lookup(%llx, hash %llx) from %llx -> %llx", (unsigned long long)a0, (unsigned long long)(a1 & 0xffffffff),
+                                         (unsigned long long)lr, (unsigned long long)c->x[0]);
+    }
+}
+extern "C" void __wrap_f_7101fe00a0(::Ctx* c) {
+    const uint64_t lr = c->x[30], a0 = c->x[0], a1 = c->x[1], a2 = c->x[2], a3 = c->x[3];
+    __real_f_7101fe00a0(c);
+    if (lr == 0x7101fdc1ccull) {
+        static std::atomic<int> n{0};
+        if (n.fetch_add(1) < 80 || c->x[0] == 0)
+            NXLOG_I("jobtrace", "run(%llx, %llx, %llx, %llx) -> %llx", (unsigned long long)a0, (unsigned long long)a1, (unsigned long long)a2,
+                    (unsigned long long)a3, (unsigned long long)c->x[0]);
+    }
+}
+
+// PKP_SAMPLE=start_ms,stop_ms (pkp-env.txt): a host thread reads the main guest thread's current function (Ctx::fn) every 20 us in
+// that window and logs each change (with lr): a rough call trace of the main thread without a re-lift.
+::Ctx* g_main_ctx = nullptr;
+void sample_main(int start_ms, int stop_ms) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(start_ms));
+    const auto stop = std::chrono::steady_clock::now() + std::chrono::milliseconds(stop_ms - start_ms);
+    uint64_t last = 0;
+    int lines = 0;
+    while (std::chrono::steady_clock::now() < stop && lines < 20000) {
+        if (::Ctx* c = g_main_ctx) {
+            const uint64_t fn = __atomic_load_n(&c->fn, __ATOMIC_RELAXED);
+            if (fn != last) {
+                NXLOG_I("sample", "main fn %llx lr %llx x0 %llx", (unsigned long long)fn, (unsigned long long)c->x[30], (unsigned long long)c->x[0]);
+                last = fn;
+                ++lines;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::microseconds(20));
+    }
+}
+
 // PKP_WATCH=addr[,addr...] (pkp-env.txt): a host thread polls those guest 64-bit words every 200 us and logs every change
 // with its time: answers "when, and to what, did the game set this" without a debugger (the main loop's exit flags).
 void watch_words(std::vector<uint64_t> addrs) {
@@ -220,6 +266,27 @@ void traced_loop(::Ctx* c) {
     NXLOG_I("looptrace", "main loop left: flags %llx [+0xf0] %llx", (unsigned long long)rd(self + 0x1e8), (unsigned long long)rd(self + 0xf0));
 }
 
+// Bring-up: strcmp from the name lookup that misses before the game leaves its loop (main 0x71017a9c80 and its callers
+// around 0x71017bc900): both strings and the answer.
+const auto g_boot_time = std::chrono::steady_clock::now();   // static init: the title's start
+nxrt::GuestFn g_strcmp_orig = nullptr;
+void traced_strcmp(::Ctx* c) {
+    const uint64_t lr = c->x[30], a = c->x[0], b = c->x[1];
+    g_strcmp_orig(c);
+    const auto t0 = g_boot_time;
+    static const int after_ms = getenv("PKP_STRTRACE_AFTER_MS") ? std::atoi(getenv("PKP_STRTRACE_AFTER_MS")) : 0;
+    if (lr >= 0x71017a9c80ull && lr < 0x71017bd000ull &&
+        std::chrono::steady_clock::now() - t0 >= std::chrono::milliseconds(after_ms)) {
+        static std::atomic<int> n{0};
+        if (n.fetch_add(1) < 400) {
+            char sa[96], sb[96];
+            guest_string(a, sa, sizeof sa);
+            guest_string(b, sb, sizeof sb);
+            NXLOG_I("strtrace", "strcmp(\"%s\", \"%s\") from %llx -> %d", sa, sb, (unsigned long long)lr, static_cast<int>(c->x[0]));
+        }
+    }
+}
+
 void trace_fs_mounts() {
     static constexpr auto table = traced_table(std::make_integer_sequence<int, 96>{});
     static const char* const kSyms[] = {
@@ -244,6 +311,8 @@ void trace_fs_mounts() {
     }
     NXLOG_I("fstrace", "%d nn::fs mount functions traced", g_traced_count);
     if ((g_loop_orig = nxrt::fn_lookup(0x7100882c60ull))) nxrt::fn_register(0x7100882c60ull, traced_loop);
+    if (const uint64_t sc = nxrt::nxmodule_find_export("strcmp"))
+        if ((g_strcmp_orig = nxrt::fn_lookup(sc))) nxrt::fn_register(sc, traced_strcmp);
 }
 
 // [boot] max_seconds: the summary of what ran (svc, ipc, stubs, modules, threads, NVN calls) goes to the log, then the run ends.
@@ -458,6 +527,11 @@ int main() {
     const uint32_t h = nxrt::kernel::main_thread_adopt(stack, "main");
     if (!h) die("cannot create the main thread");
     ::Ctx* ctx = nxrt::kernel::current_ctx();
+    g_main_ctx = ctx;
+    if (const char* smp = getenv("PKP_SAMPLE")) {
+        int a = 0, b = 0;
+        if (std::sscanf(smp, "%d,%d", &a, &b) == 2 && b > a) std::thread(sample_main, a, b).detach();
+    }
     if (!nxrt::fn_lookup(kModules[0].base)) die("the lifted rtld has no function at its entry: lift the game again");
 
     // 5. the first instruction: rtld offset 0
