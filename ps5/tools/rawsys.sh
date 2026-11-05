@@ -2,7 +2,8 @@
 # Lists the raw system call stubs (syscall instructions) in a linked title and how many direct callers each has. A title
 # may make no system call itself (the console ends it: "directly issued a syscall"); every stub with callers needs a
 # wrap onto libkernel (title/libc_ps5.cpp).   ps5/tools/rawsys.sh [linked-elf]
-B=${1:-/home/kai/pkp-ps5-build/game/pokopia_ps5}
+source "$(dirname -- "${BASH_SOURCE[0]}")/../env.sh"
+B=${1:-${PKP_BUILD:?set PKP_BUILD in ps5/local.env or pass the elf}/game/pokopia_ps5}
 O=${OBJDUMP:-llvm-objdump}
 $O -d --no-show-raw-insn $B 2>/dev/null | awk '
   /^[0-9a-f]+ <.*>:$/ { fn=$2; gsub(/[<>:]/, "", fn); next }

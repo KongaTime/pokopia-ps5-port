@@ -29,3 +29,5 @@ obj/
 __pycache__/
 # PS5 build output (ps5/p1/build.sh)
 /dist/
+# PS5: this machine's paths (ps5/local.env.example)
+/ps5/local.env

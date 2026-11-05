@@ -11,9 +11,8 @@
 #   * the AGC link stubs (libSceAgc, libSceAgcDriver), which the public SDK has none of: built by The-Darkness-Recomp's
 #     tools; ps5/game/build.sh hands the same files to ps5-native-tool link.
 
-set(PKP_RADV_ARCHIVE "/mnt/c/kb/PS5_Vulkan/.deps/native/radv-release/lib/libvulkan_radeon.ps5.a"
-    CACHE FILEPATH "RADV's release archive for the console (whole-archive)")
-set(PKP_AGC_STUBS "/mnt/c/kb/The-Darkness-Recomp/app/ps5/build/stubs" CACHE PATH "libSceAgc.so and libSceAgcDriver.so link stubs")
+set(PKP_RADV_ARCHIVE "" CACHE FILEPATH "RADV's release archive for the console (whole-archive)")
+set(PKP_AGC_STUBS "" CACHE PATH "libSceAgc.so and libSceAgcDriver.so link stubs")
 set(PKP_PLATFORM_LIBRARY "${CMAKE_SYSROOT}/lib/libps5platform.a" CACHE FILEPATH "the SDK's platform layer")
 
 function(ps5_radv target)

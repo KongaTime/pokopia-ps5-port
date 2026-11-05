@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Builds ps5/compat into libps5compat.a with the PS5 toolchain (the same flags the title build will use).
-# Usage: ps5/tools/build-compat.sh [out-dir]       default /home/kai/pkp-ps5-build/compat
+# Usage: ps5/tools/build-compat.sh [out-dir]       default $PKP_BUILD/compat (ps5/local.env)
 set -euo pipefail
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
-SDK=${PS5_SDK:-/home/kai/khdays-build/ps5-sdk}
-OUT=${1:-/home/kai/pkp-ps5-build/compat}
+source "$HERE/ps5/env.sh"
+pkp_need PS5_SDK
+SDK=$PS5_SDK
+OUT=${1:-${PKP_BUILD:?set PKP_BUILD in ps5/local.env or pass out-dir}/compat}
 mkdir -p "$OUT"
 FLAGS=(-std=c++20 -O2 -g1 -fno-strict-aliasing -fno-omit-frame-pointer -Wall -Wextra -Wno-unused-parameter
        -I"$HERE/ps5/compat" -include "$HERE/ps5/compat/prelude.h")

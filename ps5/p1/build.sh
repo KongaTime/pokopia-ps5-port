@@ -14,11 +14,13 @@ set -euo pipefail
 
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 ps5=$(dirname "$here")
-sdk=${PS5_SDK:-/home/kai/khdays-build/ps5-sdk}
-vulkan=${PS5_VULKAN_DIR:-/mnt/c/kb/PS5_Vulkan}
+source "$ps5/env.sh"
+pkp_need PS5_SDK PS5_VULKAN_DIR PKP_BUILD
+sdk=$PS5_SDK
+vulkan=$PS5_VULKAN_DIR
 tool=${PS5_NATIVE_TOOL:-$vulkan/build/host/ps5-native-tool}
-python=${PKP_PYTHON:-/home/kai/pkp-venv/bin/python}
-work=${PKP_BUILD:-/home/kai/pkp-ps5-build}
+python=${PKP_PYTHON:-python3}
+work=$PKP_BUILD
 cases=$work/p1-cases
 build=$work/p1
 tid=PPSA90002

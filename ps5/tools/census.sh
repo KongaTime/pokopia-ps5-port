@@ -14,7 +14,9 @@ shift
 SUBDIRS=("$@")
 [ ${#SUBDIRS[@]} -eq 0 ] && SUBDIRS=(core kernel mem os ipc loader eh diag services timestep)
 
-SDK=${PS5_SDK:-/home/kai/khdays-build/ps5-sdk}
+source "$(dirname -- "${BASH_SOURCE[0]}")/../env.sh"
+pkp_need PS5_SDK
+SDK=$PS5_SDK
 CXX=$SDK/bin/prospero-clang++
 mkdir -p "$OUT/logs"
 REPORT=$OUT/census.txt

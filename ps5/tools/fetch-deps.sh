@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # The graphics shell's pinned third-party sources (runtime/cmake/gfx_deps.cmake: the same URLs and SHA256s), fetched and
 # unpacked for the PS5 build. SDL is not among them: the console build takes KongaTime's PS5 SDL3 (ps5/CMakeLists.txt).
-#   ps5/tools/fetch-deps.sh [dir]        default /home/kai/pkp-ps5-build/deps
+#   ps5/tools/fetch-deps.sh [dir]        default $PKP_BUILD/deps (ps5/local.env)
 set -euo pipefail
-dir=${1:-/home/kai/pkp-ps5-build/deps}
+source "$(dirname -- "${BASH_SOURCE[0]}")/../env.sh"
+dir=${1:-${PKP_DEPS:-${PKP_BUILD:?set PKP_BUILD in ps5/local.env or pass dir}/deps}}
 mkdir -p "$dir/archives"
 fetch() {   # name url sha256
     local name=$1 url=$2 sum=$3 file=$dir/archives/$1-$(basename "$2")   # Vulkan-Headers and volk share a file name

@@ -4,6 +4,8 @@ Pokémon Pokopia (Switch 2) recompiled to run natively on Windows.
 
 [Download the latest build](https://github.com/drakolordx7/pokopia-recomp/releases/latest)
 
+PS5 (homebrew): see [ps5/README.md](ps5/README.md).
+
 You need your own copy of the game, version 2.0.1a: an extracted folder, or NSP/XCI files plus your keys. Not affiliated with Nintendo, The Pokémon Company or Koei Tecmo.
 
 ## Requirements

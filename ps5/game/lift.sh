@@ -2,16 +2,17 @@
 # Lifts the four game modules of the player's own 2.0.1 dump to C++, as recomp/games/pkp/CMakeLists.txt does on Windows
 # (same names, indexes, bases, shard counts, game config and hook sites), on Linux for the PS5 build.
 #
-#   ps5/game/lift.sh <exefs-dir> [out-dir]      out-dir default /home/kai/pkp-ps5-build/game-lift
+#   ps5/game/lift.sh <exefs-dir> [out-dir]      out-dir default $PKP_BUILD/game-lift (ps5/local.env)
 #
 # The output is made from the dump and stays outside the repository (LEGAL.md). NX_JOBS (default 6) bounds the lifter's
 # processes: the WSL machine has 7 GB.
 set -euo pipefail
 here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 root=$(cd -- "$here/../.." && pwd)
+source "$here/../env.sh"
 exefs=${1:?usage: lift.sh <exefs-dir> [out-dir]}
-out=${2:-/home/kai/pkp-ps5-build/game-lift}
-python=${PKP_PYTHON:-/home/kai/pkp-venv/bin/python}
+out=${2:-${PKP_LIFT:-${PKP_BUILD:?set PKP_BUILD in ps5/local.env or pass out-dir}/game-lift}}
+python=${PKP_PYTHON:-python3}
 jobs=${NX_JOBS:-6}
 
 "$python" - "$exefs/main" <<'PY'

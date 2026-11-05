@@ -95,11 +95,11 @@ endif()
 
 # ---- the game: the four modules ps5/game/lift.sh lifts from the player's own dump (never in the repository) ----
 set(PKP_LIFT "" CACHE PATH "ps5/game/lift.sh output folder (main/, sdk/, subsdk0/, rtld/)")
-set(PKP_BUILD_DIR "/home/kai/pkp-ps5-build" CACHE PATH "the build work folder (game/build.sh PKP_BUILD)")
+set(PKP_BUILD_DIR "" CACHE PATH "the build work folder (game/build.sh PKP_BUILD)")
 set(PKP_DEPS "" CACHE PATH "ps5/tools/fetch-deps.sh output folder (vulkan_headers/, volk/, vma/, imgui/)")
-set(PKP_SDL3_INCLUDE "/mnt/c/Users/kaika/Documents/Codex/2026-10-18/so-x20/work/SDL/include" CACHE PATH "the PS5 SDL3's headers")
-set(PKP_SDL3_LIB "/mnt/c/Users/kaika/Documents/Codex/2026-10-18/so-x20/work/khdays-port/build/ps5-sdl/SDL/libSDL3.a"
-    CACHE FILEPATH "the PS5 SDL3 static library (KongaTime's KH358/2 Days port builds it)")
+# game/build.sh passes these from ps5/local.env
+set(PKP_SDL3_INCLUDE "" CACHE PATH "the PS5 SDL3's headers")
+set(PKP_SDL3_LIB "" CACHE FILEPATH "the PS5 SDL3 static library (KongaTime's KH358/2 Days port builds it)")
 if(PKP_LIFT)
     foreach(m main sdk subsdk0 rtld)
         ps5_lifted_module(pkp_${m} "${PKP_LIFT}/${m}")
