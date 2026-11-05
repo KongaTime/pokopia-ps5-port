@@ -171,6 +171,8 @@ int main() {
     setenv("SDL_VIDEODRIVER", "ps5", 0);
     // Mesa's shader disk cache: a writable folder (the default is under $HOME, which the console does not set).
     setenv("MESA_SHADER_CACHE_DIR", (std::string(kGame) + "/mesa_cache").c_str(), 0);
+    // Bring-up: no Mesa disk cache (the fifth P3 run ended, no signal, at RADV's first compile of a game shader)
+    setenv("MESA_SHADER_CACHE_DISABLE", "true", 0);
     setenv("NXRT_LOG_LEVEL", "debug", 0);        // bring-up: the loader's map and protect steps
     // Bring-up: the compat layer's kernel calls, one line each (ps5/compat win32_internal.h crumb). The console ended the fourth
     // run with SYSTEM_ILLEGAL_FUNCTION_CALL and no signal; this file's last line names the call it refused.
