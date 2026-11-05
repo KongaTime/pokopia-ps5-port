@@ -4,7 +4,7 @@
 //                (when the port cannot be opened the audio layer falls back to the null sink, audio_sink.h).
 //  - album:      caps:su's IScreenShotApplicationService without WIC: the commands are accepted and nothing is saved yet.
 //  - swkbd:      no native prompt window: the keyboard's text comes from [applet] swkbd_text, the game's initial text, or
-//                "Player" (services_api.h's order without the PC prompt). The console's IME dialog comes later.
+//                "Player" (services_api.h's order without the PC prompt). The console's keyboard is ime_ps5.cpp.
 //  - movie:      no Media Foundation: the game's own movie library in subsdk0 runs (install_movie_hle answers false, as
 //                movie_mf.cpp does when MF is unavailable). The ffmpeg back end comes with P4.
 //  - graphics:   hdr_note_layer_luminance belongs to the graphics shell (src/gfx/extras), which this build leaves out until P3.
@@ -33,9 +33,7 @@ std::shared_ptr<ipc::Service> make_screenshot_app() {
     });
 }
 
-namespace swkbdui {
-bool win32_prompt(const Request&, std::string*) { return false; }
-}  // namespace swkbdui
+// swkbdui::win32_prompt: the console keyboard (sceImeDialog), ps5/runtime/ime_ps5.cpp
 
 }  // namespace nxrt::services
 

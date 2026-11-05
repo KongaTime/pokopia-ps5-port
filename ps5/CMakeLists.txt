@@ -154,7 +154,7 @@ if(PKP_LIFT AND PKP_DEPS)
     add_executable(pokopia_ps5 "${CMAKE_CURRENT_SOURCE_DIR}/game/pkp_ps5_main.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/game/pad_ps5.cpp")
     target_compile_options(pokopia_ps5 PRIVATE -O2 -g1 -fno-omit-frame-pointer)
     target_link_libraries(pokopia_ps5 PRIVATE pkp_main pkp_sdk pkp_subsdk0 pkp_rtld nxrt_game_pkp nxrt_gfx nxrt
-                          ScePad SceAudioOut SceUserService SceSystemService SceNet)
+                          ScePad SceAudioOut SceUserService SceSystemService SceNet SceImeDialog)
     ps5_title(pokopia_ps5)
     target_link_options(pokopia_ps5 PRIVATE -Wl,--wrap=f_7101fdcde0 -Wl,--wrap=f_7101fe00a0)   # bring-up: main-loop job trace
     target_sources(pokopia_ps5 PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/game/loop_trace.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/game/write_trap.cpp")   # bring-up: main-loop callee trace
