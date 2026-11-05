@@ -12,7 +12,7 @@
 // copied there from the player's dump, and the output goes to /app0/pkp-results (a ShadowMount title cannot write /data).
 // P2 (ps5/PLAN.md) runs with [boot] gfx = none: nvnBootstrapLoader and the NVN entry points are the runtime's logging stubs
 // and no Vulkan device is made, so the boot shows how far the game gets before its first frame without graphics on the
-// console. [boot] max_seconds (default 120 here) ends the run with the runtime's summary in the log.
+// console. [boot] max_seconds (0 here: no limit) ends the run after that many seconds with the runtime's summary in the log.
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -122,7 +122,9 @@ bool file_exists(const std::string& p) {
 extern "C" const char* nxrt_render_where();
 bool pkp_ps5_pad_init();   // game/pad_ps5.cpp
 extern "C" int sceSystemServiceHideSplashScreen(void);
+#ifdef PKP_PS5_BRINGUP
 void pkp_ps5_start_trap();   // game/write_trap.cpp
+#endif
 extern "C" const char* SDL_GetError(void);   // runtime/src/gfx/vk_renderer.cpp
 namespace {
 void memory_monitor() {
@@ -176,6 +178,7 @@ constexpr std::array<nxrt::GuestFn, sizeof...(I)> traced_table(std::integer_sequ
     return {&traced<I>...};
 }
 
+#ifdef PKP_PS5_BRINGUP
 // Bring-up: the main loop's job lookup (f_7101fdcde0) and run (f_7101fe00a0), wrapped at link time (ps5/CMakeLists.txt) and
 // logged when the main loop or its job call makes them (the loop ended after one frame on a run that returned 0).
 extern "C" void __real_f_7101fdcde0(::Ctx* c);
@@ -199,6 +202,7 @@ extern "C" void __wrap_f_7101fe00a0(::Ctx* c) {
                     (unsigned long long)a3, (unsigned long long)c->x[0]);
     }
 }
+#endif
 
 // PKP_SAMPLE=start_ms,stop_ms (pkp-env.txt): a host thread reads the main guest thread's current function (Ctx::fn) every 20 us in
 // that window and logs each change (with lr): a rough call trace of the main thread without a re-lift.
@@ -387,8 +391,8 @@ int main() {
     // P3: the NVN back end on RADV, in a window that is the console's video output (SDL3's ps5 driver: VK_KHR_display).
     // [boot] gfx = none keeps P2's logging stubs.
     setenv("NXRT_BOOT_GFX", "window", 0);
-    setenv("NXRT_GFX_VALIDATION", "0", 0);
-    setenv("NXRT_IPC_LOG_FAILURES", "1", 0);      // bring-up: every failing service command in the log       // no validation layer on the console
+    setenv("NXRT_GFX_VALIDATION", "0", 0);   // no validation layer on the console
+    // NXRT_IPC_LOG_FAILURES=1 (pkp-env.txt) logs every failing service command.
     setenv("SDL_VIDEO_DRIVER", "ps5", 0);
     setenv("SDL_VIDEODRIVER", "ps5", 0);
     // Mesa's shader disk cache: a writable folder (the default is under $HOME, which the console does not set).
@@ -396,7 +400,7 @@ int main() {
     // Bring-up: no Mesa disk cache (the fifth P3 run ended, no signal, at RADV's first compile of a game shader)
     setenv("MESA_SHADER_CACHE_DISABLE", "true", 0);
     // /app0/pkp-env.txt: NAME=VALUE lines set as environment variables before anything reads them (any NXRT_* config key,
-    // SDL or Mesa variables), so a run can be configured over FTP without a rebuild. A variable already set wins.
+    // SDL or Mesa variables), so a run can be configured over FTP without a rebuild. Its values replace the defaults above.
     if (std::FILE* env = std::fopen((std::string(kGame) + "/pkp-env.txt").c_str(), "r")) {
         char line[512];
         while (std::fgets(line, sizeof line, env)) {
@@ -404,11 +408,14 @@ int main() {
             char* eq = std::strchr(line, '=');
             if (!eq || line[0] == '#') continue;
             *eq = 0;
-            setenv(line, eq + 1, 0);
+            setenv(line, eq + 1, 1);   // the file is the player's override: it wins over the console defaults above
             stage("env %s=%s (pkp-env.txt)", line, eq + 1);
         }
         std::fclose(env);
     }
+    // Audio: the device holds the game's queue plus this margin (runtime default 30 ms). Loading stalls the game's audio thread
+    // for longer than that (about 20 underruns in the first 30 s of a console run at 30 ms); 80 ms covers them at little cost.
+    setenv("NXRT_AUDIO_OUT_LATENCY_MS", "80", 0);
     // Bring-up switches, as files in the title folder (uploaded by FTP, no rebuild): /app0/pkp-debug (debug-level log) and
     // /app0/pkp-breadcrumbs (one line per compat kernel call, svc and HLE call in pkp-results/calls.txt). Both slow the game.
     struct stat sw;
@@ -520,12 +527,15 @@ int main() {
             if (nxrt::HleFn fn = nxrt::hle_lookup("nvnBootstrapLoader")) nxrt::fn_register(def, fn);
     }
 
-    trace_fs_mounts();
+    // PKP_FSTRACE=1 (pkp-env.txt): nn::fs mounts, the main loop and strcmp traced (every guest strcmp pays for it, so off by default)
+    if (getenv("PKP_FSTRACE")) trace_fs_mounts();
     // Registered after the runtime's own atexit handlers, so it runs before them: the teardown that exit() starts is not
     // caught as crashes (each turned into another exit on the console).
     std::atexit([] { ps5compat::fault_uninstall(); });
     start_watch();
+#ifdef PKP_PS5_BRINGUP
     pkp_ps5_start_trap();
+#endif
 
     // 3. link: the game's own rtld relocates ([boot] link = rtld), or the runtime's linker ([boot] link = host)
     stage("STAGE link (%s)", nxrt::config_get_str("boot", "link", "rtld").c_str());
@@ -535,7 +545,7 @@ int main() {
         nxrt::module_protect_all();
     }
 
-    const int64_t seconds = nxrt::config_get_int("boot", "max_seconds", 600);
+    const int64_t seconds = nxrt::config_get_int("boot", "max_seconds", 0);
     if (seconds > 0) std::thread(deadline, static_cast<int>(seconds)).detach();
     std::thread(memory_monitor).detach();
 

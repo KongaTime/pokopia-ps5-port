@@ -158,9 +158,15 @@ if(PKP_LIFT AND PKP_DEPS)
                           ScePad SceAudioOut SceUserService SceSystemService SceNet SceImeDialog
                           "${PKP_BUILD_DIR}/stubs/libSceCommonDialog.so")   # ps5/stubs, built by game/build.sh
     ps5_title(pokopia_ps5)
-    target_link_options(pokopia_ps5 PRIVATE -Wl,--wrap=f_7101fdcde0 -Wl,--wrap=f_7101fe00a0)   # bring-up: main-loop job trace
-    target_sources(pokopia_ps5 PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/game/loop_trace.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/game/write_trap.cpp")   # bring-up: main-loop callee trace
-    target_link_options(pokopia_ps5 PRIVATE -Wl,--wrap=f_7101fdb040 -Wl,--wrap=f_71009fc100 -Wl,--wrap=f_7101fd9448 -Wl,--wrap=f_7101fd9440 -Wl,--wrap=f_7101fdd700 -Wl,--wrap=f_7101ffaca0 -Wl,--wrap=f_710069ed3c -Wl,--wrap=f_7100234140 -Wl,--wrap=f_7102045420 -Wl,--wrap=f_7101ff1c44 -Wl,--wrap=f_7101fdd6b4 -Wl,--wrap=f_7101fdcf20 -Wl,--wrap=f_7101ff1d60 -Wl,--wrap=f_7101ff1fe0 -Wl,--wrap=f_7101fdd6bc -Wl,--wrap=f_7102045a60 -Wl,--wrap=f_7101ff1f7c -Wl,--wrap=f_7101fdd6c0)
+    # Bring-up traces of the main loop (game/loop_trace.cpp, game/write_trap.cpp, the job trace in pkp_ps5_main.cpp): link-time
+    # wraps of game functions, so they cost on every call. -DPKP_PS5_BRINGUP=ON turns them on.
+    option(PKP_PS5_BRINGUP "PS5: link the bring-up traces of the main loop" OFF)
+    if(PKP_PS5_BRINGUP)
+        target_compile_definitions(pokopia_ps5 PRIVATE PKP_PS5_BRINGUP=1)
+        target_link_options(pokopia_ps5 PRIVATE -Wl,--wrap=f_7101fdcde0 -Wl,--wrap=f_7101fe00a0)   # bring-up: main-loop job trace
+        target_sources(pokopia_ps5 PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/game/loop_trace.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/game/write_trap.cpp")   # bring-up: main-loop callee trace
+        target_link_options(pokopia_ps5 PRIVATE -Wl,--wrap=f_7101fdb040 -Wl,--wrap=f_71009fc100 -Wl,--wrap=f_7101fd9448 -Wl,--wrap=f_7101fd9440 -Wl,--wrap=f_7101fdd700 -Wl,--wrap=f_7101ffaca0 -Wl,--wrap=f_710069ed3c -Wl,--wrap=f_7100234140 -Wl,--wrap=f_7102045420 -Wl,--wrap=f_7101ff1c44 -Wl,--wrap=f_7101fdd6b4 -Wl,--wrap=f_7101fdcf20 -Wl,--wrap=f_7101ff1d60 -Wl,--wrap=f_7101ff1fe0 -Wl,--wrap=f_7101fdd6bc -Wl,--wrap=f_7102045a60 -Wl,--wrap=f_7101ff1f7c -Wl,--wrap=f_7101fdd6c0)
+    endif()
     include("${CMAKE_CURRENT_SOURCE_DIR}/radv.cmake")   # P3: Vulkan on the console (RADV)
     ps5_radv(pokopia_ps5)
 endif()
