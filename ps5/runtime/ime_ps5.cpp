@@ -41,6 +41,10 @@ struct PkpImeDialogResult {         // SceImeDialogResult
     int32_t end_status;             // 0 OK, 1 cancelled, 2 aborted
     int8_t reserved[12];
 };
+int sceImeDialogInit(const PkpImeDialogParam* param, const void* extended);
+int sceImeDialogGetStatus(void);
+int sceImeDialogGetResult(PkpImeDialogResult* result);
+int sceImeDialogTerm(void);
 int sceKernelLoadStartModule(const char* path, size_t args, const void* argp, uint32_t flags, void* opt, int* result);
 int sceKernelDlsym(int handle, const char* symbol, void** address);
 const char* sceKernelGetFsSandboxRandomWord(void);
@@ -107,12 +111,22 @@ const Ime& ime() {
             if (h >= 0) break;
         }
         if (h < 0) return r;
-        sceKernelDlsym(h, "sceImeDialogInit", reinterpret_cast<void**>(&r.init));
+        const int d1 = sceKernelDlsym(h, "sceImeDialogInit", reinterpret_cast<void**>(&r.init));
         sceKernelDlsym(h, "sceImeDialogGetStatus", reinterpret_cast<void**>(&r.get_status));
         sceKernelDlsym(h, "sceImeDialogGetResult", reinterpret_cast<void**>(&r.get_result));
         sceKernelDlsym(h, "sceImeDialogTerm", reinterpret_cast<void**>(&r.term));
         r.ok = r.init && r.get_status && r.get_result && r.term;
-        NXLOG_I("am", "swkbd: console keyboard: functions %s (init %p)", r.ok ? "found" : "missing", reinterpret_cast<void*>(r.init));
+        NXLOG_I("am", "swkbd: console keyboard: sceKernelDlsym -> 0x%08x, functions %s (init %p)", static_cast<unsigned>(d1),
+                r.ok ? "found" : "missing", reinterpret_cast<void*>(r.init));
+        if (!r.ok) {
+            // The module is loaded now: the title's own imports of it can bind (they jumped to 0 while it was not).
+            r.init = &::sceImeDialogInit;
+            r.get_status = &::sceImeDialogGetStatus;
+            r.get_result = &::sceImeDialogGetResult;
+            r.term = &::sceImeDialogTerm;
+            r.ok = true;
+            NXLOG_I("am", "swkbd: console keyboard: using the title's imports of libSceImeDialog");
+        }
         return r;
     }();
     return m;
