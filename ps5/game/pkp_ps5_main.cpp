@@ -134,7 +134,10 @@ int main() {
     nxrt_register_game_pkp();   // before anything reads it (nxrt::init, play mode, the services): docs/GAME_BOUNDARY.md
     mkdir(kOut, 0777);
     // RADV and Mesa report on standard error (why vkCreateInstance fails, for one): into klog, as PS5_Vulkan's radv_smoke does.
-    ps5_klog_capture_stderr("[pkp:stderr] ");
+    // Bring-up without etaHEN's klog server: RADV's stderr goes to a file in the results folder instead.
+    // (PKP_STDERR_FILE; unbuffered writes to /app0 cost about 50 ms a line, so the default stays klog.)
+    if (!getenv("PKP_STDERR_FILE")) ps5_klog_capture_stderr("[pkp:stderr] ");
+    else if (std::freopen((std::string(kOut) + "/stderr.txt").c_str(), "w", stderr)) setvbuf(stderr, nullptr, _IONBF, 0);
     g_stage = std::fopen((std::string(kOut) + "/boot.txt").c_str(), "wb");
     stage("pokopia-ps5 P3: the 2.0.1 game on the runtime, Vulkan through RADV");
     notify("Pokopia (P2) starting");
