@@ -48,8 +48,8 @@ struct Pad {
     PadSample last{};
 } g_pad;
 
-// scePad button bits per SDL gamepad button (0: the pad has none, e.g. BACK and GUIDE: Options is START, the PS button
-// belongs to the system).
+// scePad button bits per SDL gamepad button (0: the pad has none, e.g. GUIDE: Options is START, the touchpad is BACK, the PS
+// button belongs to the system).
 uint32_t button_bit(int b) {
     switch (b) {
         case SDL_GAMEPAD_BUTTON_SOUTH: return 0x4000;            // cross
@@ -65,7 +65,8 @@ uint32_t button_bit(int b) {
         case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: return 0x0020;
         case SDL_GAMEPAD_BUTTON_DPAD_DOWN: return 0x0040;
         case SDL_GAMEPAD_BUTTON_DPAD_LEFT: return 0x0080;
-        case SDL_GAMEPAD_BUTTON_TOUCHPAD: return 0x100000;
+        // The touchpad click is the Switch's - (Select): the DualSense has no Back/Select button, and Pokopia uses - (camera).
+        case SDL_GAMEPAD_BUTTON_BACK: return 0x100000;
         default: return 0;
     }
 }
