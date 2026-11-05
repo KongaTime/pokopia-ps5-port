@@ -9,8 +9,14 @@
 // So the title's link wraps pthread_create and pthread_exit (ps5/CMakeLists.txt, ps5_title): a thread runs its function
 // through a trampoline that runs the destructors after it, and pthread_exit runs them first. A thread that ends some
 // other way still runs them, from a pthread key destructor (the fallback, in no fixed order with libkernel's).
+#include <ps5platform/heap.h>
+
+#include <atomic>
+#include <ctime>
+#include <mutex>
 #include <pthread.h>
 #include <stdlib.h>
+#include <vector>
 
 namespace {
 
@@ -45,7 +51,41 @@ void run_list(void *head) {
 struct Start {
     void *(*fn)(void *);
     void *arg;
+    void *stack;   // ours (direct memory), retired when the thread ends
 };
+
+// Thread stacks in direct memory. pthread's own come from flexible memory, of which the console gives a title a few
+// hundred MiB in all: with 8 MiB stacks (RADV's shader compiler needs them) the sixth P3 run had 34 MiB of it left at
+// 5 s and ended in abort() at 7.5 s. A stack cannot be freed by the thread running on it, so an ended thread's stack is
+// retired with a time, and freed by a later pthread_create once a second has passed (the thread is gone by then).
+struct Retired {
+    void *stack;
+    time_t at;
+};
+std::mutex g_retired_mu;
+std::vector<Retired> *g_retired;
+
+void retire(void *stack) {
+    if (!stack) return;
+    std::lock_guard lk(g_retired_mu);
+    if (!g_retired) g_retired = new std::vector<Retired>;
+    g_retired->push_back({stack, time(nullptr)});
+}
+void free_retired() {
+    std::lock_guard lk(g_retired_mu);
+    if (!g_retired) return;
+    const time_t now = time(nullptr);
+    for (size_t i = 0; i < g_retired->size();) {
+        if (now - (*g_retired)[i].at >= 2) {
+            ps5_heap_free((*g_retired)[i].stack);
+            (*g_retired)[i] = g_retired->back();
+            g_retired->pop_back();
+        } else {
+            ++i;
+        }
+    }
+}
+thread_local void *t_stack = nullptr;
 
 // The console starts threads with flush-to-zero and denormals-are-zero set in MXCSR (bits 15 and 6), as it starts a title;
 // _start clears them for the main thread only (title/fp_ieee.cpp). Code built here, the lifted guest code above all,
@@ -61,8 +101,10 @@ void *trampoline(void *p) {
     const Start s = *static_cast<Start *>(p);
     free(p);
     fp_ieee();
+    t_stack = s.stack;
     void *result = s.fn(s.arg);
     run_destructors();
+    retire(t_stack);
     return result;
 }
 
@@ -86,36 +128,48 @@ int __real_pthread_create(pthread_t *thread, const pthread_attr_t *attr, void *(
 int __wrap_pthread_create(pthread_t *thread, const pthread_attr_t *attr, void *(*fn)(void *), void *arg) {
     auto *s = static_cast<Start *>(malloc(sizeof(Start)));
     if (!s) return 12;   // ENOMEM
-    *s = Start{fn, arg};
+    *s = Start{fn, arg, nullptr};
     // A thread that does not choose its stack (std::thread passes no attributes) gets 8 MiB, Linux's default: the
     // console's default is far smaller, and the first P3 run's render thread overflowed it inside RADV's shader
     // compiler (nir_opt_varyings, from vkCreateGraphicsPipelines). Threads with their own stack (the compat layer's,
     // ps5_vrange) or an explicit size of 8 MiB or more keep theirs.
     constexpr size_t kStack = size_t(8) << 20;
+    free_retired();
     pthread_attr_t local;
-    const pthread_attr_t *use = attr;
+    pthread_attr_t *use = const_cast<pthread_attr_t *>(attr);
     bool own = false;
     if (!attr) {
         if (pthread_attr_init(&local) == 0) {
-            pthread_attr_setstacksize(&local, kStack);
             use = &local;
             own = true;
         }
-    } else {
+    }
+    s->stack = nullptr;
+    if (use) {
         void *addr = nullptr;
         size_t size = 0;
-        if (pthread_attr_getstack(attr, &addr, &size) == 0 && !addr && size < kStack)
-            pthread_attr_setstacksize(const_cast<pthread_attr_t *>(attr), kStack);
+        if (pthread_attr_getstack(use, &addr, &size) == 0 && !addr) {   // no stack of its own: one in direct memory
+            const size_t want = size > kStack ? size : kStack;
+            if (void *st = ps5_heap_memalign(16384, want)) {
+                if (pthread_attr_setstack(use, st, want) == 0) s->stack = st;
+                else ps5_heap_free(st);
+            }
+            if (!s->stack && size < kStack) pthread_attr_setstacksize(use, kStack);
+        }
     }
     const int e = __real_pthread_create(thread, use, trampoline, s);
     if (own) pthread_attr_destroy(&local);
-    if (e != 0) free(s);
+    if (e != 0) {
+        if (s->stack) ps5_heap_free(s->stack);
+        free(s);
+    }
     return e;
 }
 
 [[noreturn]] void __real_pthread_exit(void *value);
 [[noreturn]] void __wrap_pthread_exit(void *value) {
     run_destructors();
+    retire(t_stack);
     __real_pthread_exit(value);
 }
 

@@ -88,6 +88,9 @@ bool to_wide(const std::string& s, std::wstring& out) {
 
 // Host paths that may exceed MAX_PATH get the extended-length prefix. The input must already use backslashes.
 std::wstring long_path(std::wstring p) {
+#ifndef _WIN32
+    return p;   // POSIX hosts (the PS5 port): '/' is the separator and there is no extended-length prefix
+#endif
     std::replace(p.begin(), p.end(), L'/', L'\\');
     if (p.size() < kLongPath || p.compare(0, 4, L"\\\\?\\") == 0) return p;
     if (p.compare(0, 2, L"\\\\") == 0) return L"\\\\?\\UNC\\" + p.substr(2);

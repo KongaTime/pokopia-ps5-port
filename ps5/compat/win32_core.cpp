@@ -20,6 +20,8 @@
 #include <cstdlib>
 #include <map>
 #include <mutex>
+#include <atomic>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -391,21 +393,48 @@ std::map<std::string, Mutex *> g_named;
 // ---------------------------------------------------------------------------------------------------------------------
 // shared helpers (win32_internal.h)
 
+// Breadcrumbs go to a ring of the last kCrumbs lines in memory (one write() per line to /app0 slowed the game to a
+// crawl); crumb_dump writes them, oldest first, to $NXRT_PS5_BREADCRUMBS (the title calls it every few seconds).
+constexpr size_t kCrumbs = 1 << 16, kCrumbLen = 128;
+char (*g_crumbs)[kCrumbLen] = nullptr;
+std::atomic<uint64_t> g_crumb_next{0};
+std::atomic<bool> g_crumb_frozen{false};
+
+void crumb_freeze() { g_crumb_frozen.store(true, std::memory_order_relaxed); }
+
 void crumb(const char* format, ...) {
-    static const int fd = [] {
+    static const bool on = [] {
         const char* path = getenv("NXRT_PS5_BREADCRUMBS");
-        return path && *path ? open(path, O_WRONLY | O_CREAT | O_TRUNC | O_APPEND | O_CLOEXEC, 0666) : -1;
+        if (!path || !*path) return false;
+        g_crumbs = static_cast<char (*)[kCrumbLen]>(calloc(kCrumbs, kCrumbLen));
+        return g_crumbs != nullptr;
     }();
-    if (fd < 0) return;
-    char line[256];
-    int n = std::snprintf(line, sizeof line, "%llu t%u ", static_cast<unsigned long long>(now_ns() / 1000), current_tid());
+    if (!on || g_crumb_frozen.load(std::memory_order_relaxed)) return;
+    char* line = g_crumbs[g_crumb_next.fetch_add(1, std::memory_order_relaxed) % kCrumbs];
+    int n = std::snprintf(line, kCrumbLen, "%llu t%u ", static_cast<unsigned long long>(now_ns() / 1000), current_tid());
+    if (n < 0 || n >= static_cast<int>(kCrumbLen)) return;
     va_list a;
     va_start(a, format);
-    n += std::vsnprintf(line + n, sizeof line - static_cast<size_t>(n) - 1, format, a);
+    std::vsnprintf(line + n, kCrumbLen - static_cast<size_t>(n), format, a);
     va_end(a);
-    if (n > static_cast<int>(sizeof line) - 2) n = sizeof line - 2;
-    line[n++] = '\n';
-    (void)write(fd, line, static_cast<size_t>(n));
+}
+
+void crumb_dump() {
+    const char* path = getenv("NXRT_PS5_BREADCRUMBS");
+    if (!g_crumbs || !path || !*path) return;
+    const int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0666);
+    if (fd < 0) return;
+    const uint64_t end = g_crumb_next.load(std::memory_order_relaxed);
+    const uint64_t begin = end > kCrumbs ? end - kCrumbs : 0;
+    std::string out;
+    out.reserve(static_cast<size_t>(end - begin) * 64);
+    for (uint64_t i = begin; i < end; ++i) {
+        const char* line = g_crumbs[i % kCrumbs];
+        out.append(line, strnlen(line, kCrumbLen));
+        out.push_back('\n');
+    }
+    (void)write(fd, out.data(), out.size());
+    close(fd);
 }
 
 bool stack_grow(uint64_t address) {

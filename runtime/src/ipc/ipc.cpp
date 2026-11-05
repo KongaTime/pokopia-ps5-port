@@ -288,7 +288,17 @@ uint32_t control(const std::shared_ptr<KSession>& s, const hipc::Message& m, Res
 
 uint32_t Service::handle(Request& req, Response& rsp) {
     auto it = cmds_.find(req.cmd);
-    if (it != cmds_.end()) return it->second.fn(req, rsp);
+    if (it != cmds_.end()) {
+        const uint32_t r = it->second.fn(req, rsp);
+        // [ipc] log_failures: every command that answers a failure, with its service and result (bring-up: a game that aborts
+        // on a Result names no call)
+        static const bool log_failures = config_get_bool("ipc", "log_failures", false);
+        if (r && log_failures)
+            NXLOG_W("ipc", "%s cmd %u -> 0x%x (module %u, description %u)", name_.c_str(), req.cmd, r, r & 0x1ff, (r >> 9) & 0x1fff);
+        else if (log_failures && name_.find("fssrv") != std::string::npos)   // and every file-system object call
+            NXLOG_I("ipc", "%s cmd %u %s -> 0", name_.c_str(), req.cmd, it->second.name);
+        return r;
+    }
     // [ipc] stub_result (NXRT_IPC_STUB_RESULT) also answers unknown commands of real services. The default refuses with kStubService
     // (the guest sees a failure at the call that has no answer); 0 is a bring-up probe only: an empty "success" hands the guest zeros
     // and no objects, so the crash comes later and far from its cause. Logged at Warn once per (service, command); the end-of-run

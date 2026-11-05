@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 
 // compat/win32_memory.cpp's, in titles that link the compat layer (weak: the others have no sections to back).
 namespace ps5compat {
@@ -75,6 +76,10 @@ ssize_t __wrap_readlink(const char* path, char* buffer, size_t size) { return ps
 int __wrap_link(const char* existing, const char* name) { return ps5_link(existing, name); }
 int __wrap_symlink(const char* target, const char* name) { return ps5_symlink(target, name); }
 mode_t __wrap_umask(mode_t mask) { return ps5_umask(mask); }
+// lstat is refused to a title (Monado-PS5's paths.c measured it); libc++'s directory_entry::symlink_status uses it, and
+// the RomFS index (runtime/src/services/fs_romfs.cpp) stopped at "cannot stat /motor_asset_re". The title's folders hold
+// no symbolic links, so stat answers.
+int __wrap_lstat(const char* path, struct stat* st) { return stat(path, st); }
 
 // The SDK's libc links these as raw system call stubs (mov $n, %rax; syscall), and a title may make no system call
 // itself: the seventh P2 run's klog says "PPRBUG-22859: the process directly issued a syscall 244" (clock_nanosleep,

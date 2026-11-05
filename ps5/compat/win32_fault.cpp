@@ -93,6 +93,7 @@ void on_signal(int sig, siginfo_t *info, void *uctx) {
     // A committed section page touched for the first time: its 64 KiB unit gets memory, and the access is retried.
     if ((sig == SIGSEGV || sig == SIGBUS) && info && section_fault(reinterpret_cast<uint64_t>(info->si_addr))) return;
     crumb("signal %d addr %p rip %#llx", sig, info ? info->si_addr : nullptr, static_cast<unsigned long long>(uc->uc_mcontext.mc_rip));
+    crumb_freeze();
     EXCEPTION_RECORD rec{};
     CONTEXT ctx;
     to_context(uc->uc_mcontext, ctx);
@@ -236,6 +237,8 @@ BOOL GetThreadContext(HANDLE thread, PCONTEXT context) {
 }
 
 void RaiseException(DWORD code, DWORD flags, DWORD count, const ULONG_PTR *arguments) {
+    crumb("RaiseException %#x", static_cast<unsigned>(code));
+    if (code != 0x406D1388) crumb_freeze();   // not the debugger thread-name notice
     EXCEPTION_RECORD rec{};
     rec.ExceptionCode = code;
     rec.ExceptionFlags = flags;

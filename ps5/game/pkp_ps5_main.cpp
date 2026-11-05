@@ -17,12 +17,16 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <array>
 #include <memory>
+#include <utility>
 #include <string>
 #include <sys/stat.h>
 #include <thread>
 #include <unistd.h>
 
+#include <ps5platform/heap.h>
+#include <ps5platform/kernel.h>
 #include <ps5platform/klog.h>
 
 #include "nxrt/config.h"
@@ -107,6 +111,87 @@ bool file_exists(const std::string& p) {
     return stat(p.c_str(), &st) == 0 && S_ISREG(st.st_mode);
 }
 
+// Bring-up: memory every 5 s into boot.txt (the title heap, direct and flexible memory left), to tell an exhausted pool
+// from the rest when the driver answers VK_ERROR_OUT_OF_HOST_MEMORY.
+}  // namespace
+namespace ps5compat { void crumb_dump(); }   // compat/win32_core.cpp
+namespace {
+void memory_monitor() {
+    for (int t = 5;; t += 5) {
+        std::this_thread::sleep_for(std::chrono::seconds(5));
+        struct ps5_heap_stats hs{};
+        ps5_heap_stats(&hs);
+        int64_t dstart = 0;
+        size_t dsize = 0, flex = 0;
+        sceKernelAvailableDirectMemorySize(0, sceKernelGetDirectMemorySize(), 0x10000, &dstart, &dsize);
+        sceKernelAvailableFlexibleMemorySize(&flex);
+        ps5compat::crumb_dump();
+        stage("MEM %3d s: heap mapped %zu MiB (peak %zu, %u arenas, libc fallbacks %llu), direct free (largest run) %zu MiB of %lld, flexible free %zu MiB",
+              t, hs.mapped_bytes >> 20, hs.peak_bytes >> 20, hs.arenas, hs.libc_fallbacks, dsize >> 20,
+              static_cast<long long>(sceKernelGetDirectMemorySize() >> 20), flex >> 20);
+    }
+}
+
+// Bring-up: nn::fs mount and unmount calls into the log (the game aborted in nn::fs::Unmount with 2-6905, a name that was
+// never mounted). Each wrapped export logs its name argument and result around the lifted original.
+struct Traced {
+    const char* sym;
+    nxrt::GuestFn orig;
+};
+Traced g_traced[96];
+int g_traced_count = 0;
+
+void guest_string(uint64_t a, char* out, size_t cap) {
+    out[0] = 0;
+    if (a < 0x7000000000ull || a >= 0x8000000000ull) return;   // not a guest pointer (an id argument)
+    size_t i = 0;
+    for (; i + 1 < cap; ++i) {
+        const char ch = *reinterpret_cast<const char*>(a + i);
+        if (!ch) break;
+        out[i] = ch;
+    }
+    out[i] = 0;
+}
+
+template <int N>
+void traced(::Ctx* c) {
+    char name[64];
+    guest_string(c->x[0], name, sizeof name);
+    NXLOG_I("fstrace", "%s(\"%s\")", g_traced[N].sym, name);
+    g_traced[N].orig(c);
+    NXLOG_I("fstrace", "%s(\"%s\") -> 0x%x", g_traced[N].sym, name, static_cast<uint32_t>(c->x[0]));
+}
+
+template <int... I>
+constexpr std::array<nxrt::GuestFn, sizeof...(I)> traced_table(std::integer_sequence<int, I...>) {
+    return {&traced<I>...};
+}
+
+void trace_fs_mounts() {
+    static constexpr auto table = traced_table(std::make_integer_sequence<int, 96>{});
+    static const char* const kSyms[] = {
+        "_ZN2nn2fs7UnmountEPKc", "_ZN2nn2fs8MountRomEPKcPvm", "_ZN2nn2fs13MountSaveDataEPKcNS0_6UserIdE",
+        "_ZN2nn2fs13MountSaveDataEPKcRKNS_7account3UidE", "_ZN2nn2fs13MountSaveDataEPKcNS_13ApplicationIdERKNS_7account3UidE",
+        "_ZN2nn2fs13MountSaveDataEPKcNS_3ncm13ApplicationIdENS0_6UserIdE", "_ZN2nn2fs17MountCacheStorageEPKc",
+        "_ZN2nn2fs17MountCacheStorageEPKci", "_ZN2nn2fs19MountDeviceSaveDataEPKc", "_ZN2nn2fs17MountBcatSaveDataEPKcNS_3ncm13ApplicationIdE",
+        "_ZN2nn2fs17MountAddOnContentEPKciPvm", "_ZN2nn2fs15MountSystemDataEPKcNS_3ncm12SystemDataIdE",
+        "_ZN2nn2fs15MountSystemDataEPKcNS_3ncm12SystemDataIdEPvm", "_ZN2nn2fs11MountSdCardEPKc", "_ZN2nn2fs12MountRamDiskEPKcPvm",
+        "_ZN2nn2fs21MountSaveDataReadOnlyEPKcNS_13ApplicationIdERKNS_7account3UidE",
+        "_ZN2nn2fs20MountTemporaryStorageEPKc", "_ZN2nn4bcat24MountDeliveryCacheStorageEv",
+        "_ZN2nn4bcat24MountDeliveryCacheStorageENS_13ApplicationIdE",
+    };
+    for (const char* sym : kSyms) {
+        const uint64_t a = nxrt::nxmodule_find_export(sym);
+        if (!a || g_traced_count >= 96) continue;
+        nxrt::GuestFn orig = nxrt::fn_lookup(a);
+        if (!orig) continue;
+        g_traced[g_traced_count] = {sym, orig};
+        nxrt::fn_register(a, table[g_traced_count]);
+        ++g_traced_count;
+    }
+    NXLOG_I("fstrace", "%d nn::fs mount functions traced", g_traced_count);
+}
+
 // [boot] max_seconds: the summary of what ran (svc, ipc, stubs, modules, threads, NVN calls) goes to the log, then the run ends.
 void deadline(int seconds) {
     std::this_thread::sleep_for(std::chrono::seconds(seconds));
@@ -169,17 +254,25 @@ int main() {
     // P3: the NVN back end on RADV, in a window that is the console's video output (SDL3's ps5 driver: VK_KHR_display).
     // [boot] gfx = none keeps P2's logging stubs.
     setenv("NXRT_BOOT_GFX", "window", 0);
-    setenv("NXRT_GFX_VALIDATION", "0", 0);       // no validation layer on the console
+    setenv("NXRT_GFX_VALIDATION", "0", 0);
+    setenv("NXRT_IPC_LOG_FAILURES", "1", 0);      // bring-up: every failing service command in the log       // no validation layer on the console
     setenv("SDL_VIDEO_DRIVER", "ps5", 0);
     setenv("SDL_VIDEODRIVER", "ps5", 0);
     // Mesa's shader disk cache: a writable folder (the default is under $HOME, which the console does not set).
     setenv("MESA_SHADER_CACHE_DIR", (std::string(kGame) + "/mesa_cache").c_str(), 0);
     // Bring-up: no Mesa disk cache (the fifth P3 run ended, no signal, at RADV's first compile of a game shader)
     setenv("MESA_SHADER_CACHE_DISABLE", "true", 0);
-    setenv("NXRT_LOG_LEVEL", "debug", 0);        // bring-up: the loader's map and protect steps
+    // Bring-up switches, as files in the title folder (uploaded by FTP, no rebuild): /app0/pkp-debug (debug-level log) and
+    // /app0/pkp-breadcrumbs (one line per compat kernel call, svc and HLE call in pkp-results/calls.txt). Both slow the game.
+    struct stat sw;
+    const bool debug_log = getenv("PKP_DEBUG") || stat((std::string(kGame) + "/pkp-debug").c_str(), &sw) == 0;
+    const bool crumbs = getenv("PKP_BREADCRUMBS") || stat((std::string(kGame) + "/pkp-breadcrumbs").c_str(), &sw) == 0;
+    setenv("NXRT_LOG_LEVEL", debug_log ? "debug" : "info", 0);         // debug-level lines, each written to /app0, slowed the whole game down        // bring-up: the loader's map and protect steps
     // Bring-up: the compat layer's kernel calls, one line each (ps5/compat win32_internal.h crumb). The console ended the fourth
     // run with SYSTEM_ILLEGAL_FUNCTION_CALL and no signal; this file's last line names the call it refused.
-    setenv("NXRT_PS5_BREADCRUMBS", (std::string(kOut) + "/calls.txt").c_str(), 0);
+    // Off by default since P3: one write() to /app0 per call slowed every guest thread to a crawl (calls fell from ~320/s
+    // to ~3/s over two minutes). PKP_BREADCRUMBS=1 turns them back on.
+    if (crumbs) setenv("NXRT_PS5_BREADCRUMBS", (std::string(kOut) + "/calls.txt").c_str(), 0);
 
     // /app0/pkp.ini, when there is one, sets anything else.
     const std::string ini = std::string(kGame) + "/pkp.ini";
@@ -274,6 +367,8 @@ int main() {
             if (nxrt::HleFn fn = nxrt::hle_lookup("nvnBootstrapLoader")) nxrt::fn_register(def, fn);
     }
 
+    trace_fs_mounts();
+
     // 3. link: the game's own rtld relocates ([boot] link = rtld), or the runtime's linker ([boot] link = host)
     stage("STAGE link (%s)", nxrt::config_get_str("boot", "link", "rtld").c_str());
     if (nxrt::config_get_str("boot", "link", "rtld") == "host") {
@@ -282,8 +377,9 @@ int main() {
         nxrt::module_protect_all();
     }
 
-    const int64_t seconds = nxrt::config_get_int("boot", "max_seconds", 120);
+    const int64_t seconds = nxrt::config_get_int("boot", "max_seconds", 600);
     if (seconds > 0) std::thread(deadline, static_cast<int>(seconds)).detach();
+    std::thread(memory_monitor).detach();
 
     // 4. the main thread: the npdm of main says 1 MiB of stack, priority 44, core 0
     const uint64_t stack = static_cast<uint64_t>(nxrt::config_get_int("boot", "main_stack_kb", 1024)) << 10;
