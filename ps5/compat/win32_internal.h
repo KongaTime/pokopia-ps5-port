@@ -61,6 +61,8 @@ std::string native_path(const char *path);   // backslashes to slashes
 void fault_thread_init();
 // Installs the fault handler (once): done by the first vectored handler, and by the first growable thread stack.
 void fault_install();
+// The process is ending: the signal handlers go back to the system and are not installed again.
+void fault_uninstall();
 
 // Thread stacks (win32_core.cpp) are reserved whole and committed as they grow, as Windows does: the fault handler calls
 // this first for an access fault, and resumes the thread when it returns true (the page was in a stack's reserve and

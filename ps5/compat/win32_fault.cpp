@@ -125,9 +125,11 @@ void on_signal(int sig, siginfo_t *info, void *uctx) {
         if (kSignals[i] == sig) sigaction(sig, &g_previous[i], nullptr);
 }
 
+std::atomic<bool> g_exiting{false};
+
 void install() {
     std::lock_guard lk(g_install_mu);
-    if (g_installed) return;
+    if (g_installed || g_exiting.load()) return;
     fault_thread_init();
     struct sigaction sa{};
     sa.sa_sigaction = on_signal;
@@ -142,6 +144,17 @@ thread_local void *t_altstack = nullptr;
 }  // namespace
 
 void fault_install() { install(); }
+
+// The process is ending: the signals go back to the system. The console signals the title's threads while it tears the process
+// down after exit(); caught here, each was dispatched as a crash and the crash handler called exit again (the klog of the first P3
+// runs: exit_value 1, then exit_value 4 over and over, SIGSYS in libkernel). Not installed again after this.
+void fault_uninstall() {
+    g_exiting = true;
+    struct sigaction sa{};
+    sa.sa_handler = SIG_DFL;
+    sigemptyset(&sa.sa_mask);
+    for (size_t i = 0; i < sizeof kSignals / sizeof kSignals[0]; ++i) sigaction(kSignals[i], &sa, nullptr);
+}
 
 bool seh_guard_call(void (*fn)(void *), void *arg) {
     install();

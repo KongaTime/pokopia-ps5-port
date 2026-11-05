@@ -664,7 +664,10 @@ void ExitThread(DWORD code) {
     pthread_exit(nullptr);
 }
 
-void ExitProcess(UINT code) { exit(static_cast<int>(code)); }
+void ExitProcess(UINT code) {
+    fault_uninstall();   // no crash reports from the teardown that follows
+    exit(static_cast<int>(code));
+}
 
 BOOL TerminateProcess(HANDLE process, UINT code) {
     if (process != pseudo_process() && GetProcessId(process) != GetCurrentProcessId()) {

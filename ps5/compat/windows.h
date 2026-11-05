@@ -407,8 +407,9 @@ typedef LPTOP_LEVEL_EXCEPTION_FILTER PTOP_LEVEL_EXCEPTION_FILTER;
 namespace ps5compat {
 // Bring-up breadcrumbs (win32_internal.h): a line in $NXRT_PS5_BREADCRUMBS, nothing when it is unset.
 void crumb(const char *format, ...) __attribute__((format(printf, 1, 2)));
-void crumb_dump();
-void crumb_freeze();   // keeps the ring as it is (the first unhandled exception or fault)   // writes the breadcrumb ring to $NXRT_PS5_BREADCRUMBS
+void crumb_dump();        // writes the breadcrumb ring to $NXRT_PS5_BREADCRUMBS
+void crumb_freeze();      // keeps the ring as it is (the first unhandled exception or fault)
+void fault_uninstall();   // the process is ending: signals back to the system (win32_fault.cpp)
 bool seh_guard_call(void (*fn)(void *), void *arg);
 // Backs any committed section pages in [p, p + n) that have no memory yet (they are backed on first touch, which the
 // kernel does not do for a buffer handed to it: read() into one fails with EFAULT instead).

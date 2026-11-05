@@ -47,6 +47,8 @@
 
 #include "pkp/pkp_game.h"
 
+namespace ps5compat { void crumb_dump(); void fault_uninstall(); }   // compat/win32_core.cpp, win32_fault.cpp
+
 extern "C" {
 extern const NxModule nxmod_main, nxmod_sdk, nxmod_subsdk0, nxmod_rtld;
 extern const uint32_t nxmod_main_abi, nxmod_sdk_abi, nxmod_subsdk0_abi, nxmod_rtld_abi;
@@ -105,6 +107,7 @@ void notify(const char* text) {
     std::snprintf(text, sizeof text, format, a, b);
     stage("FAIL %s", text);
     notify(text);
+    ps5compat::fault_uninstall();   // no crash reports from the teardown
     std::_Exit(1);
 }
 
@@ -116,7 +119,6 @@ bool file_exists(const std::string& p) {
 // Bring-up: memory every 5 s into boot.txt (the title heap, direct and flexible memory left), to tell an exhausted pool
 // from the rest when the driver answers VK_ERROR_OUT_OF_HOST_MEMORY.
 }  // namespace
-namespace ps5compat { void crumb_dump(); }   // compat/win32_core.cpp
 extern "C" const char* nxrt_render_where();
 bool pkp_ps5_pad_init();   // game/pad_ps5.cpp
 extern "C" int sceSystemServiceHideSplashScreen(void);
@@ -340,6 +342,7 @@ void deadline(int seconds) {
     char text[96];
     std::snprintf(text, sizeof text, "Pokopia: ran %d s, see pkp-results", seconds);
     notify(text);
+    ps5compat::fault_uninstall();
     std::_Exit(124);
 }
 
@@ -518,6 +521,9 @@ int main() {
     }
 
     trace_fs_mounts();
+    // Registered after the runtime's own atexit handlers, so it runs before them: the teardown that exit() starts is not
+    // caught as crashes (each turned into another exit on the console).
+    std::atexit([] { ps5compat::fault_uninstall(); });
     start_watch();
     pkp_ps5_start_trap();
 
