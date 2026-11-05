@@ -119,6 +119,7 @@ bool file_exists(const std::string& p) {
 namespace ps5compat { void crumb_dump(); }   // compat/win32_core.cpp
 extern "C" const char* nxrt_render_where();
 bool pkp_ps5_pad_init();   // game/pad_ps5.cpp
+extern "C" int sceSystemServiceHideSplashScreen(void);
 void pkp_ps5_start_trap();   // game/write_trap.cpp
 extern "C" const char* SDL_GetError(void);   // runtime/src/gfx/vk_renderer.cpp
 namespace {
@@ -452,6 +453,9 @@ int main() {
             wd.width = disp.width;
             wd.height = disp.height;
             if (!nxrt::platform::create_window(wd)) die("cannot create the game window (see pkp.log)");
+            // The system keeps its launch splash up until the title says otherwise (KongaTime's ports do this at start); system
+            // dialogs (the keyboard) wait behind it: sceImeDialogInit never returned without it.
+            NXLOG_I("boot", "sceSystemServiceHideSplashScreen -> 0x%08x", static_cast<unsigned>(sceSystemServiceHideSplashScreen()));
         }
         stage("STAGE vulkan device (%s)", gfxmode.c_str());
         nxrt::gfx::DeviceDesc dd;

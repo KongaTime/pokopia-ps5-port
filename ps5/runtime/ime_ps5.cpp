@@ -6,7 +6,9 @@
 // The dialog's interface is the one the PS4 SDK has (also as OpenOrbis documents it: SceImeDialogParam, 96 bytes), which the PS5
 // keeps. The dialog runs in the system; this thread waits for it. When it cannot be opened at all the answer is "Player", so the
 // game can go on.
+#include <atomic>
 #include <chrono>
+#include <memory>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -94,30 +96,56 @@ bool win32_prompt(const Request& r, std::string* text) {
     static const int cdrc = sceCommonDialogInitialize();
     NXLOG_I("am", "swkbd: console keyboard: sceCommonDialogInitialize -> 0x%08x", static_cast<unsigned>(cdrc));
 
+    // A keyboard that cannot open at all (sceImeDialogInit that does not return: the second console try) is not asked again.
+    static std::atomic<bool> broken{false};
+    if (broken.load()) {
+        *text = "Player";
+        return true;
+    }
+    struct Open {   // outlives this call when sceImeDialogInit hangs: the thread that calls it keeps it
+        std::u16string buffer, title, placeholder;
+        PkpImeDialogParam p{};
+        std::atomic<bool> done{false};
+        std::atomic<int> rc{0};
+    };
+    auto o = std::make_shared<Open>();
     const uint32_t max_len = r.max_len ? r.max_len : 500;
-    std::u16string buffer = to_utf16(r.initial);
-    buffer.resize(max_len + 1, u'\0');
-    buffer[max_len] = u'\0';
-    const std::u16string title = to_utf16(!r.header.empty() ? r.header : r.title);
-    const std::u16string placeholder = to_utf16(r.guide);
-
-    PkpImeDialogParam p{};
+    o->buffer = to_utf16(r.initial);
+    o->buffer.resize(max_len + 1, u'\0');
+    o->buffer[max_len] = u'\0';
+    o->title = to_utf16(!r.header.empty() ? r.header : r.title);
+    o->placeholder = to_utf16(r.guide);
+    PkpImeDialogParam& p = o->p;
     p.user_id = user;
     p.max_text_length = max_len;
-    p.input_text_buffer = buffer.data();
+    p.input_text_buffer = o->buffer.data();
     p.posx = 1920.0f / 2;
     p.posy = 1080.0f / 2;
     p.horizontal_alignment = 1;
     p.vertical_alignment = 1;
-    p.title = title.c_str();
-    p.placeholder = placeholder.empty() ? nullptr : placeholder.c_str();
+    p.title = o->title.c_str();
+    p.placeholder = o->placeholder.empty() ? nullptr : o->placeholder.c_str();
 
-    int rc = sceImeDialogInit(&p, nullptr);
-    NXLOG_I("am", "swkbd: console keyboard: sceImeDialogInit -> 0x%08x, status %d", static_cast<unsigned>(rc), sceImeDialogGetStatus());
-    if (rc < 0) {   // one already up (an earlier request that was not taken down): end it and try once more
-        sceImeDialogTerm();
-        rc = sceImeDialogInit(&p, nullptr);
+    std::thread([o] {
+        int rc = sceImeDialogInit(&o->p, nullptr);
+        if (rc < 0) {   // one already up (an earlier request that was not taken down): end it and try once more
+            sceImeDialogTerm();
+            rc = sceImeDialogInit(&o->p, nullptr);
+        }
+        o->rc = rc;
+        o->done = true;
+    }).detach();
+    for (int ms = 0; !o->done.load() && ms < 20000; ms += 50) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    if (!o->done.load()) {
+        NXLOG_W("am", "swkbd: the console keyboard did not open in 20 s (sceImeDialogInit has not returned); answering \"Player\"");
+        broken = true;
+        *text = "Player";
+        return true;
     }
+    const int rc = o->rc.load();
+    const std::u16string& buffer = o->buffer;
+    const std::u16string& title = o->title;
+    NXLOG_I("am", "swkbd: console keyboard: sceImeDialogInit -> 0x%08x, status %d", static_cast<unsigned>(rc), sceImeDialogGetStatus());
     if (rc < 0) {
         NXLOG_W("am", "swkbd: the console keyboard (sceImeDialogInit) failed: 0x%08x; answering \"Player\"", static_cast<unsigned>(rc));
         *text = "Player";
