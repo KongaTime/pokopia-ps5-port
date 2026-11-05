@@ -95,6 +95,7 @@ endif()
 
 # ---- the game: the four modules ps5/game/lift.sh lifts from the player's own dump (never in the repository) ----
 set(PKP_LIFT "" CACHE PATH "ps5/game/lift.sh output folder (main/, sdk/, subsdk0/, rtld/)")
+set(PKP_BUILD_DIR "/home/kai/pkp-ps5-build" CACHE PATH "the build work folder (game/build.sh PKP_BUILD)")
 set(PKP_DEPS "" CACHE PATH "ps5/tools/fetch-deps.sh output folder (vulkan_headers/, volk/, vma/, imgui/)")
 set(PKP_SDL3_INCLUDE "/mnt/c/Users/kaika/Documents/Codex/2026-10-18/so-x20/work/SDL/include" CACHE PATH "the PS5 SDL3's headers")
 set(PKP_SDL3_LIB "/mnt/c/Users/kaika/Documents/Codex/2026-10-18/so-x20/work/khdays-port/build/ps5-sdl/SDL/libSDL3.a"
@@ -154,7 +155,8 @@ if(PKP_LIFT AND PKP_DEPS)
     add_executable(pokopia_ps5 "${CMAKE_CURRENT_SOURCE_DIR}/game/pkp_ps5_main.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/game/pad_ps5.cpp")
     target_compile_options(pokopia_ps5 PRIVATE -O2 -g1 -fno-omit-frame-pointer)
     target_link_libraries(pokopia_ps5 PRIVATE pkp_main pkp_sdk pkp_subsdk0 pkp_rtld nxrt_game_pkp nxrt_gfx nxrt
-                          ScePad SceAudioOut SceUserService SceSystemService SceNet SceImeDialog)
+                          ScePad SceAudioOut SceUserService SceSystemService SceNet SceImeDialog
+                          "${PKP_BUILD_DIR}/stubs/libSceCommonDialog.so")   # ps5/stubs, built by game/build.sh
     ps5_title(pokopia_ps5)
     target_link_options(pokopia_ps5 PRIVATE -Wl,--wrap=f_7101fdcde0 -Wl,--wrap=f_7101fe00a0)   # bring-up: main-loop job trace
     target_sources(pokopia_ps5 PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/game/loop_trace.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/game/write_trap.cpp")   # bring-up: main-loop callee trace

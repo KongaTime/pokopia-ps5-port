@@ -82,6 +82,12 @@ fi
 [[ -d $lift/main ]] || fail "no lifted game at $lift (run ps5/game/lift.sh)"
 [[ -d $deps/volk ]] || fail "no graphics dependencies at $deps (run ps5/tools/fetch-deps.sh)"
 
+# Link stubs for system libraries the public SDK has none of (ps5/stubs): libSceCommonDialog (the console keyboard needs it).
+stubs=$work/stubs
+mkdir -p "$stubs"
+"$sdk/bin/prospero-clang" -O2 -fPIC -c "$ps5/stubs/common_dialog_stub.c" -o "$stubs/libSceCommonDialog.o"
+"$sdk/bin/prospero-lld" --shared -soname libSceCommonDialog.prx -o "$stubs/libSceCommonDialog.so" "$stubs/libSceCommonDialog.o"
+
 echo "==> [1/4] build"
 cmake -S "$ps5" -B "$build" -G Ninja -DCMAKE_TOOLCHAIN_FILE="$sdk/toolchain/prospero.cmake" -DCMAKE_BUILD_TYPE=Release \
     -DPKP_LIFT="$lift" -DPKP_DEPS="$deps" >/dev/null
@@ -91,7 +97,7 @@ echo "==> [2/4] convert and sign"
 rm -rf "$dist"
 mkdir -p "$build/link" "$dist/sce_sys" "$dist/sce_module"
 "$tool" link --in "$build/pokopia_ps5" --out "$build/link/eboot.elf" --stub-dir "$sdk/target/lib" \
-    --stub "$agc/libSceAgc.so" --stub "$agc/libSceAgcDriver.so" \
+    --stub "$agc/libSceAgc.so" --stub "$agc/libSceAgcDriver.so" --stub "$stubs/libSceCommonDialog.so" \
     --module-sdk 0x02000009 --companion-sdk 0x08050001 --file-name eboot.elf
 "$tool" self --sign --in "$build/link/eboot.elf" --out "$dist/eboot.bin" --magic 0x1D3D154F
 "$tool" self --inspect --file "$dist/eboot.bin" | grep -E 'container|integrity'

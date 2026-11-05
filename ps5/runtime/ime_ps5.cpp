@@ -43,6 +43,7 @@ int sceImeDialogGetStatus(void);    // 0 none, 1 running, 2 finished
 int sceImeDialogGetResult(PkpImeDialogResult* result);
 int sceImeDialogTerm(void);
 int sceUserServiceInitialize(const void*);
+int sceCommonDialogInitialize(void);   // libSceCommonDialog (ps5/stubs): before any system dialog
 int sceUserServiceGetInitialUser(int32_t* user);
 }
 
@@ -84,9 +85,14 @@ std::string to_utf8(const char16_t* s) {
 }  // namespace
 
 bool win32_prompt(const Request& r, std::string* text) {
+    NXLOG_I("am", "swkbd: console keyboard: starting");
     (void)sceUserServiceInitialize(nullptr);
     int32_t user = 0;
-    sceUserServiceGetInitialUser(&user);
+    const int urc = sceUserServiceGetInitialUser(&user);
+    NXLOG_I("am", "swkbd: console keyboard: user %d (0x%08x)", user, static_cast<unsigned>(urc));
+    // The system dialogs need their common layer first; without it sceImeDialogInit never returned (the first console try).
+    static const int cdrc = sceCommonDialogInitialize();
+    NXLOG_I("am", "swkbd: console keyboard: sceCommonDialogInitialize -> 0x%08x", static_cast<unsigned>(cdrc));
 
     const uint32_t max_len = r.max_len ? r.max_len : 500;
     std::u16string buffer = to_utf16(r.initial);
@@ -107,6 +113,7 @@ bool win32_prompt(const Request& r, std::string* text) {
     p.placeholder = placeholder.empty() ? nullptr : placeholder.c_str();
 
     int rc = sceImeDialogInit(&p, nullptr);
+    NXLOG_I("am", "swkbd: console keyboard: sceImeDialogInit -> 0x%08x, status %d", static_cast<unsigned>(rc), sceImeDialogGetStatus());
     if (rc < 0) {   // one already up (an earlier request that was not taken down): end it and try once more
         sceImeDialogTerm();
         rc = sceImeDialogInit(&p, nullptr);
@@ -117,9 +124,21 @@ bool win32_prompt(const Request& r, std::string* text) {
         return true;
     }
     NXLOG_I("am", "swkbd: console keyboard open (\"%s\", up to %u characters)", to_utf8(title.c_str()).c_str(), max_len);
-    while (sceImeDialogGetStatus() == 1) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    // Waits for the player; a dialog that never shows (and so never finishes) ends after 3 minutes with "Player".
+    int status = 1, waited = 0;
+    while ((status = sceImeDialogGetStatus()) == 1 && waited < 180000) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        waited += 50;
+        if (waited % 10000 == 0) NXLOG_I("am", "swkbd: console keyboard: still open after %d s", waited / 1000);
+    }
     PkpImeDialogResult res{};
-    sceImeDialogGetResult(&res);
+    const int grc = sceImeDialogGetResult(&res);
+    NXLOG_I("am", "swkbd: console keyboard: status %d, result 0x%08x, end status %d", status, static_cast<unsigned>(grc), res.end_status);
+    if (status == 1) {
+        sceImeDialogTerm();
+        *text = "Player";
+        return true;
+    }
     sceImeDialogTerm();
     if (res.end_status != 0) return false;
     *text = to_utf8(buffer.c_str());
