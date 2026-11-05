@@ -1894,6 +1894,18 @@ VkImageView tex_sampled_view(Texture* t, const ViewRequest& req) {
         if (a != VK_FORMAT_UNDEFINED && format_view_ok(*g, a)) fmt = a;
     }
     if (!format_view_ok(*g, fmt)) {
+        // The image took its format's fallback (nvn_format.cpp vk_fallback: an AMD GPU has no D24_UNORM_S8_UINT, so DEPTH24_STENCIL8 is
+        // D32_SFLOAT_S8_UINT there): a view asking for the format the GPU lacks gets the same fallback.
+        VkFormat alt = VK_FORMAT_UNDEFINED;
+        switch (fmt) {
+            case VK_FORMAT_D24_UNORM_S8_UINT: alt = VK_FORMAT_D32_SFLOAT_S8_UINT; break;
+            case VK_FORMAT_X8_D24_UNORM_PACK32:
+            case VK_FORMAT_D16_UNORM: alt = VK_FORMAT_D32_SFLOAT; break;
+            default: break;
+        }
+        if (alt != VK_FORMAT_UNDEFINED && alt == g->format) fmt = alt;
+    }
+    if (!format_view_ok(*g, fmt)) {
         char what[160];
         snprintf(what, sizeof what, "view format %d is not compatible with the image's %d (NVN texture format %d, image mutable %d)", static_cast<int>(fmt),
                  static_cast<int>(g->format), static_cast<int>(t->b.format), g->mutable_fmt ? 1 : 0);
