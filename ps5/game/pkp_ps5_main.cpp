@@ -20,6 +20,7 @@
 #include <array>
 #include <memory>
 #include <utility>
+#include <vector>
 #include <string>
 #include <sys/stat.h>
 #include <thread>
@@ -170,6 +171,55 @@ constexpr std::array<nxrt::GuestFn, sizeof...(I)> traced_table(std::integer_sequ
     return {&traced<I>...};
 }
 
+// PKP_WATCH=addr[,addr...] (pkp-env.txt): a host thread polls those guest 64-bit words every 200 us and logs every change
+// with its time: answers "when, and to what, did the game set this" without a debugger (the main loop's exit flags).
+void watch_words(std::vector<uint64_t> addrs) {
+    std::vector<uint64_t> last(addrs.size(), ~0ull);
+    // Not before the guest heap holds them: a read of reserved memory faults (the first try, at 1 s, did).
+    const char* delay = getenv("PKP_WATCH_AFTER_MS");
+    std::this_thread::sleep_for(std::chrono::milliseconds(delay ? std::atoi(delay) : 5000));
+    for (;;) {
+        for (size_t i = 0; i < addrs.size(); ++i) {
+            const uint64_t a = addrs[i];
+            if (a < 0x7000000000ull || a >= 0x8000000000ull) continue;
+            if (nxrt::kernel::current_ctx() == nullptr && false) break;
+            const uint64_t v = __atomic_load_n(reinterpret_cast<const uint64_t*>(a), __ATOMIC_RELAXED);
+            if (v != last[i]) {
+                NXLOG_I("watch", "%llx: %llx -> %llx", (unsigned long long)a, (unsigned long long)last[i], (unsigned long long)v);
+                last[i] = v;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::microseconds(200));
+    }
+}
+
+void start_watch() {
+    const char* w = getenv("PKP_WATCH");
+    if (!w || !*w) return;
+    std::vector<uint64_t> addrs;
+    for (const char* p = w; *p;) {
+        char* end = nullptr;
+        const uint64_t a = std::strtoull(p, &end, 0);
+        if (end == p) break;
+        addrs.push_back(a);
+        p = *end ? end + 1 : end;
+    }
+    NXLOG_I("watch", "watching %zu guest words", addrs.size());
+    std::thread(watch_words, addrs).detach();
+}
+
+// The game's main loop (main 0x7100882c60): runs while the flags at x0+0x1e8 have none of bits 21-23 and x0+0xf0 holds a
+// pointer; the first P3 runs left it at once. Logs both on the way in and out.
+nxrt::GuestFn g_loop_orig = nullptr;
+void traced_loop(::Ctx* c) {
+    const uint64_t self = c->x[0];
+    auto rd = [](uint64_t a) -> uint64_t { return (a >= 0x7000000000ull && a < 0x8000000000ull) ? *reinterpret_cast<const uint64_t*>(a) : 0; };
+    NXLOG_I("looptrace", "main loop enter: this %llx flags %llx [+0xf0] %llx", (unsigned long long)self, (unsigned long long)rd(self + 0x1e8),
+            (unsigned long long)rd(self + 0xf0));
+    g_loop_orig(c);
+    NXLOG_I("looptrace", "main loop left: flags %llx [+0xf0] %llx", (unsigned long long)rd(self + 0x1e8), (unsigned long long)rd(self + 0xf0));
+}
+
 void trace_fs_mounts() {
     static constexpr auto table = traced_table(std::make_integer_sequence<int, 96>{});
     static const char* const kSyms[] = {
@@ -193,6 +243,7 @@ void trace_fs_mounts() {
         ++g_traced_count;
     }
     NXLOG_I("fstrace", "%d nn::fs mount functions traced", g_traced_count);
+    if ((g_loop_orig = nxrt::fn_lookup(0x7100882c60ull))) nxrt::fn_register(0x7100882c60ull, traced_loop);
 }
 
 // [boot] max_seconds: the summary of what ran (svc, ipc, stubs, modules, threads, NVN calls) goes to the log, then the run ends.
@@ -265,6 +316,20 @@ int main() {
     setenv("MESA_SHADER_CACHE_DIR", (std::string(kGame) + "/mesa_cache").c_str(), 0);
     // Bring-up: no Mesa disk cache (the fifth P3 run ended, no signal, at RADV's first compile of a game shader)
     setenv("MESA_SHADER_CACHE_DISABLE", "true", 0);
+    // /app0/pkp-env.txt: NAME=VALUE lines set as environment variables before anything reads them (any NXRT_* config key,
+    // SDL or Mesa variables), so a run can be configured over FTP without a rebuild. A variable already set wins.
+    if (std::FILE* env = std::fopen((std::string(kGame) + "/pkp-env.txt").c_str(), "r")) {
+        char line[512];
+        while (std::fgets(line, sizeof line, env)) {
+            line[std::strcspn(line, "\r\n")] = 0;
+            char* eq = std::strchr(line, '=');
+            if (!eq || line[0] == '#') continue;
+            *eq = 0;
+            setenv(line, eq + 1, 0);
+            stage("env %s=%s (pkp-env.txt)", line, eq + 1);
+        }
+        std::fclose(env);
+    }
     // Bring-up switches, as files in the title folder (uploaded by FTP, no rebuild): /app0/pkp-debug (debug-level log) and
     // /app0/pkp-breadcrumbs (one line per compat kernel call, svc and HLE call in pkp-results/calls.txt). Both slow the game.
     struct stat sw;
@@ -374,6 +439,7 @@ int main() {
     }
 
     trace_fs_mounts();
+    start_watch();
 
     // 3. link: the game's own rtld relocates ([boot] link = rtld), or the runtime's linker ([boot] link = host)
     stage("STAGE link (%s)", nxrt::config_get_str("boot", "link", "rtld").c_str());
