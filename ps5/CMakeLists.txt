@@ -145,7 +145,7 @@ if(PKP_LIFT AND PKP_DEPS)
     target_link_libraries(nxrt_game_pkp PUBLIC nxrt_gfx)
 
     # The title (P2: ps5/game/pkp_ps5_main.cpp)
-    add_executable(pokopia_ps5 "${CMAKE_CURRENT_SOURCE_DIR}/game/pkp_ps5_main.cpp")
+    add_executable(pokopia_ps5 "${CMAKE_CURRENT_SOURCE_DIR}/game/pkp_ps5_main.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/game/pad_ps5.cpp")
     target_compile_options(pokopia_ps5 PRIVATE -O2 -g1 -fno-omit-frame-pointer)
     target_link_libraries(pokopia_ps5 PRIVATE pkp_main pkp_sdk pkp_subsdk0 pkp_rtld nxrt_game_pkp nxrt_gfx nxrt
                           ScePad SceAudioOut SceUserService SceSystemService SceNet)

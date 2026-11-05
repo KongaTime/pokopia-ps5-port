@@ -25,6 +25,8 @@
 namespace nxrt::gfx {
 namespace {
 constexpr const char* kTag = "gfx";
+// Where the presenting thread is (bring-up: a frame loop stuck inside the driver's WSI shows here); render_where() reads it.
+std::atomic<const char*> g_render_where{"not started"};
 
 struct ImageState {   // a barrier helper description
     VkImageLayout layout;
@@ -658,14 +660,18 @@ bool Renderer::begin_frame(FrameInfo* out) {
     if (s.kind != extras::OutputKind::Sdr8 && extras::hdr_state().metadata_serial != s.md_serial) s.apply_hdr_metadata();   // the game declared new levels
 
     Impl::Slot& slot = s.slots[s.cur_slot];
+    g_render_where.store("vkWaitForFences (frame slot)");
     vkWaitForFences(s.vk(), 1, &slot.fence, VK_TRUE, UINT64_MAX);
+    g_render_where.store("frame");
     s.read_timestamps(slot);
 
     uint32_t idx = 0;
     if (s.headless) {
         idx = static_cast<uint32_t>(s.frame_number % s.targets.size());
     } else {
+        g_render_where.store("vkAcquireNextImageKHR");
         VkResult r = vkAcquireNextImageKHR(s.vk(), s.swapchain, UINT64_MAX, slot.acquire, VK_NULL_HANDLE, &idx);
+        g_render_where.store("frame");
         if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_ERROR_SURFACE_LOST_KHR) {
             s.dirty = true;
             s.st.out_of_date++;
@@ -801,7 +807,9 @@ void Renderer::end_frame() {
                 pid.pPresentIds = &present_id;
                 pi.pNext = &pid;
             }
+            g_render_where.store("vkQueuePresentKHR");
             r = vkQueuePresentKHR(s.dev->queue(), &pi);
+            g_render_where.store("frame");
             s.st.presents++;
             if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR || r == VK_ERROR_SURFACE_LOST_KHR) {
                 s.dirty = true;
@@ -940,4 +948,8 @@ bool Renderer::capture_pending() const { return impl_->cap_pending.load(std::mem
 RendererStats Renderer::stats() const { return impl_->st; }
 void Renderer::wait_idle() { impl_->dev->wait_idle(); }
 
+const char* g_render_where_get() { return g_render_where.load(); }
+
 }  // namespace nxrt::gfx
+
+extern "C" const char* nxrt_render_where() { return nxrt::gfx::g_render_where_get(); }

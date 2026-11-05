@@ -395,7 +395,7 @@ std::map<std::string, Mutex *> g_named;
 
 // Breadcrumbs go to a ring of the last kCrumbs lines in memory (one write() per line to /app0 slowed the game to a
 // crawl); crumb_dump writes them, oldest first, to $NXRT_PS5_BREADCRUMBS (the title calls it every few seconds).
-constexpr size_t kCrumbs = 1 << 16, kCrumbLen = 128;
+constexpr size_t kCrumbs = 1 << 20, kCrumbLen = 128;   // 128 MiB: about 15 s of a busy boot
 char (*g_crumbs)[kCrumbLen] = nullptr;
 std::atomic<uint64_t> g_crumb_next{0};
 std::atomic<bool> g_crumb_frozen{false};

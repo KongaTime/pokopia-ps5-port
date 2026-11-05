@@ -241,6 +241,107 @@ bool back_unit(Section &s, size_t u) {
     return true;
 }
 
+// Sets the console protection of [start, end) for pages nobody else can see yet (just backed, g_mu held): the same
+// union per console page as apply(), with neighbouring pages of equal protection set in one call. Backing an 80 MiB pool
+// chunk page by page (one call per 16 KiB page and view) took about 5 s of the render thread on the console.
+void apply_new(uint64_t start, uint64_t end) {
+    uint64_t run = 0, run_end = 0;
+    int run_bits = -1;
+    auto flush = [&] {
+        if (run_bits >= 0 && run_end > run &&
+            sceKernelMprotect(reinterpret_cast<void *>(run), run_end - run, run_bits) != 0)
+            for (uint64_t p = run; p < run_end; p += kConsolePage) protect_page(p, run_bits);
+        run_bits = -1;
+    };
+    for (uint64_t p = down(start, kConsolePage); p < up(end, kConsolePage); p += kConsolePage) {
+        int bits = 0;
+        bool any = false;
+        for (uint64_t a = p; a < p + kConsolePage; a += kWinPage) {
+            const uint8_t e = get(a);
+            if (state_of(e) == kCommitted && backed_of(e)) {
+                any = true;
+                bits |= console_bits(prot_of(e)) | (view_of(e) ? kGpuRW : 0);
+            }
+        }
+        if (!any) bits = kGpuRW;   // uncommitted: no CPU access (as back_unit)
+        if (bits != run_bits || p != run_end) {
+            flush();
+            run = p;
+            run_bits = bits;
+        }
+        run_end = p + kConsolePage;
+    }
+    flush();
+}
+
+// Backs the section units [u0, u1) that have no memory yet (g_mu held), a run of consecutive ones at a time: one
+// allocation, one mapping per view, one zeroing, protections in as few calls as they allow. Falls back to back_unit
+// when direct memory has no contiguous run that large.
+bool back_units(Section &s, size_t u0, size_t u1) {
+    constexpr size_t kMaxRun = 1024;   // 64 MiB per allocation
+    for (size_t u = u0; u < u1;) {
+        if (s.units[u] >= 0) { ++u; continue; }
+        size_t e = u;
+        while (e < u1 && e - u < kMaxRun && s.units[e] < 0) ++e;
+        const uint64_t bytes = uint64_t(e - u) * kUnit;
+        int64_t phys = 0;
+        if (e - u == 1 || sceKernelAllocateDirectMemory(0, sceKernelGetDirectMemorySize(), bytes, kUnit, 0, &phys) != 0) {
+            for (size_t k = u; k < e; ++k)
+                if (!back_unit(s, k)) return false;
+            u = e;
+            continue;
+        }
+        // Zeroed before any view shows it (released direct memory comes back with its old contents): through a private
+        // mapping, so no thread sees the run before it is clean or loses a write to a late memset.
+        {
+            void *tmp = nullptr;
+            if (sceKernelMapDirectMemory(&tmp, bytes, PS5_KERNEL_PROT_CPU_READ | PS5_KERNEL_PROT_CPU_WRITE, 0, phys, kUnit) != 0) {
+                sceKernelReleaseDirectMemory(phys, bytes);
+                for (size_t k = u; k < e; ++k)
+                    if (!back_unit(s, k)) return false;
+                u = e;
+                continue;
+            }
+            memset(tmp, 0, bytes);
+            sceKernelMunmap(tmp, bytes);
+        }
+        for (size_t k = u; k < e; ++k) s.units[k] = phys + int64_t(k - u) * int64_t(kUnit);
+        const uint64_t off0 = uint64_t(u) * kUnit, off1 = uint64_t(e) * kUnit;
+        bool zeroed = true;
+        for (Alloc *v : s.views) {
+            const uint64_t lo = std::max(off0, v->offset), hi = std::min(off1, v->offset + v->size);
+            if (lo >= hi) continue;
+            void *at = reinterpret_cast<void *>(v->base + (lo - v->offset));
+            if (sceKernelMapDirectMemory(&at, up(hi - lo, kConsolePage), PS5_KERNEL_PROT_CPU_READ | PS5_KERNEL_PROT_CPU_WRITE | kGpuRW,
+                                         PS5_KERNEL_MAP_FIXED, phys + int64_t(lo - off0), 0) != 0)
+                return false;
+            const uint64_t a = v->base + (lo - v->offset), b = v->base + (hi - v->offset);
+            if (!zeroed && lo == off0 && hi == off1) {
+                memset(reinterpret_cast<void *>(a), 0, bytes);
+                zeroed = true;
+            }
+        }
+        if (!zeroed)   // no view holds the whole run: zero it unit by unit through any view that has each
+            for (size_t k = u; k < e; ++k)
+                for (Alloc *v : s.views) {
+                    const uint64_t o = uint64_t(k) * kUnit;
+                    if (o >= v->offset && o + kUnit <= v->offset + v->size) {
+                        memset(reinterpret_cast<void *>(v->base + (o - v->offset)), 0, kUnit);
+                        break;
+                    }
+                }
+        for (Alloc *v : s.views) {
+            const uint64_t lo = std::max(off0, v->offset), hi = std::min(off1, v->offset + v->size);
+            if (lo >= hi) continue;
+            const uint64_t a = v->base + (lo - v->offset), b = v->base + (hi - v->offset);
+            mark_backed(a, b, true);
+            apply_new(a, b);
+        }
+        u = e;
+    }
+    return true;
+}
+
 // Commits section pages [off, end) seen through view `by` with `prot`; other views get their own access. As on Windows,
 // a SEC_RESERVE commit charges nothing yet: each 64 KiB unit gets its memory when a page of it is first touched
 // (section_fault) or handed to the kernel (touch). Committing gigabytes is then a table update, where backing them at
@@ -267,7 +368,10 @@ bool back_view_page(uint64_t addr) {
     if (state_of(e) != kCommitted || !view_of(e) || backed_of(e)) return false;
     Alloc *v = alloc_at(addr);
     if (!v || !v->section) return false;
-    return back_unit(*v->section, (v->offset + (addr - v->base)) / kUnit);
+    // 1 MiB from the faulting unit on (within the view): a game filling a large buffer takes a sixteenth of the faults.
+    const size_t u = (v->offset + (addr - v->base)) / kUnit;
+    const size_t last = (v->offset + v->size - 1) / kUnit + 1;
+    return back_units(*v->section, u, std::min<size_t>(u + 16, last));
 }
 
 }  // namespace
@@ -286,11 +390,23 @@ void touch(const void *p, size_t n) {
     if (a >= kLimit) return;
     const uint64_t end = std::min<uint64_t>(a + n, kLimit);
     bool locked = false;
-    for (uint64_t q = down(a, kWinPage); q < end; q += kWinPage) {
+    for (uint64_t q = down(a, kWinPage); q < end;) {
         const uint8_t e = get(q);
-        if (state_of(e) != kCommitted || !view_of(e) || backed_of(e)) continue;
+        if (state_of(e) != kCommitted || !view_of(e) || backed_of(e)) {
+            q += kWinPage;
+            continue;
+        }
         if (!locked) { g_mu.lock(); locked = true; }
-        back_view_page(q);
+        Alloc *v = alloc_at(q);
+        if (!v || !v->section) {
+            q += kWinPage;
+            continue;
+        }
+        const uint64_t vend = std::min<uint64_t>(end, v->base + v->size);
+        const size_t u0 = (v->offset + (q - v->base)) / kUnit;
+        const size_t u1 = (v->offset + (vend - 1 - v->base)) / kUnit + 1;
+        back_units(*v->section, u0, u1);
+        q = vend;
     }
     if (locked) g_mu.unlock();
 }

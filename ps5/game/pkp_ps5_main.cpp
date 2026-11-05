@@ -115,6 +115,9 @@ bool file_exists(const std::string& p) {
 // from the rest when the driver answers VK_ERROR_OUT_OF_HOST_MEMORY.
 }  // namespace
 namespace ps5compat { void crumb_dump(); }   // compat/win32_core.cpp
+extern "C" const char* nxrt_render_where();
+bool pkp_ps5_pad_init();   // game/pad_ps5.cpp
+extern "C" const char* SDL_GetError(void);   // runtime/src/gfx/vk_renderer.cpp
 namespace {
 void memory_monitor() {
     for (int t = 5;; t += 5) {
@@ -126,9 +129,9 @@ void memory_monitor() {
         sceKernelAvailableDirectMemorySize(0, sceKernelGetDirectMemorySize(), 0x10000, &dstart, &dsize);
         sceKernelAvailableFlexibleMemorySize(&flex);
         ps5compat::crumb_dump();
-        stage("MEM %3d s: heap mapped %zu MiB (peak %zu, %u arenas, libc fallbacks %llu), direct free (largest run) %zu MiB of %lld, flexible free %zu MiB",
+        stage("MEM %3d s: heap mapped %zu MiB (peak %zu, %u arenas, libc fallbacks %llu), direct free (largest run) %zu MiB of %lld, flexible free %zu MiB; presenting thread in %s",
               t, hs.mapped_bytes >> 20, hs.peak_bytes >> 20, hs.arenas, hs.libc_fallbacks, dsize >> 20,
-              static_cast<long long>(sceKernelGetDirectMemorySize() >> 20), flex >> 20);
+              static_cast<long long>(sceKernelGetDirectMemorySize() >> 20), flex >> 20, nxrt_render_where());
     }
 }
 
@@ -301,6 +304,9 @@ int main() {
             stage("STAGE window");
             disp = nxrt::play::display();
             if (!nxrt::platform::init()) die("the platform layer (SDL3) did not start (see pkp.log)");
+            // The DualSense as an SDL gamepad (game/pad_ps5.cpp): without one the game finds no controller and leaves its loop.
+            if (pkp_ps5_pad_init()) NXLOG_I("boot", "DualSense attached as an SDL gamepad");
+            else NXLOG_W("boot", "no DualSense: %s", SDL_GetError());
             nxrt::platform::WindowDesc wd;
             wd.title = nxrt::game::info().title;
             wd.width = disp.width;

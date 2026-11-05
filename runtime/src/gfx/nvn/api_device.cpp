@@ -23,6 +23,7 @@
 //
 // Layouts and enum values are those of the NVN header (third_party/nvn/nvn.h). Event signal mode WRITE is the header's
 // NVN_EVENT_SIGNAL_MODE_WRITE. Constants used by the device info table: nvn_device_info.inc.
+#include <chrono>
 #include <atomic>
 #include <cstring>
 #include <vector>
@@ -31,6 +32,7 @@
 #include "nxrt/game.h"
 #include "nvn_cmd.h"
 #include "nvn_gpu.h"
+#include "nvn_gpu_internal.h"
 #include "nvn_impl.h"
 #include "nxrt/gauge.h"
 #include "nxrt/log.h"
@@ -348,8 +350,20 @@ NVNsyncWaitResult nvnSyncWait(const NVNsync* sync, uint64_t timeout_ns) {
     if (!s || !s->armed.load()) return NVN_SYNC_WAIT_RESULT_ALREADY_SIGNALED;
     const uint64_t serial = s->serial.load();
     if (serial == 0 || be::gpu::serial_done(serial)) return NVN_SYNC_WAIT_RESULT_ALREADY_SIGNALED;
-    return be::gpu::wait_serial(serial, timeout_ns) ? NVN_SYNC_WAIT_RESULT_CONDITION_SATISFIED
-                                                    : NVN_SYNC_WAIT_RESULT_TIMEOUT_EXPIRED;
+    const bool ok = be::gpu::wait_serial(serial, timeout_ns);
+    if (!ok) {   // bring-up: a wait that keeps timing out, against the back end's counters (once a second at most)
+        static std::atomic<uint64_t> last_ns{0}, misses{0};
+        misses.fetch_add(1);
+        const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+        if (now - last_ns.load() > 1000000000ull) {
+            last_ns.store(now);
+            NXLOG_W(kTag, "nvnSyncWait timed out: sync serial %llu, completed %llu, last reserved %llu, timeout %llu ns (%llu timeouts so far)",
+                    static_cast<unsigned long long>(serial), static_cast<unsigned long long>(be::gpu::completed_serial()),
+                    static_cast<unsigned long long>(be::gpu::last_serial()), static_cast<unsigned long long>(timeout_ns),
+                    static_cast<unsigned long long>(misses.load()));
+        }
+    }
+    return ok ? NVN_SYNC_WAIT_RESULT_CONDITION_SATISFIED : NVN_SYNC_WAIT_RESULT_TIMEOUT_EXPIRED;
 }
 
 // ---- event --------------------------------------------------------------------------------------------------------------

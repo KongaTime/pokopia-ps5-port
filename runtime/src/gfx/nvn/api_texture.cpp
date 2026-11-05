@@ -494,7 +494,14 @@ size_t nvnTextureBuilderGetStorageSize(const NVNtextureBuilder* builder) {
 
 size_t nvnTextureBuilderGetStorageAlignment(const NVNtextureBuilder* builder) {
     if (!builder) return 0;
-    const TexLayout L = be::compute_texture_layout(decode(builder));
+    const TextureBuilderInfo bi = decode(builder);
+    const TexLayout L = be::compute_texture_layout(bi);
+    if (!L.valid) {   // the game treats 0 as a failure: the builder that had no layout
+        static std::atomic<int> logged{0};
+        if (logged.fetch_add(1) < 16)
+            NXLOG_W("nvn", "nvnTextureBuilderGetStorageAlignment: no layout for target %d %dx%dx%d levels %d samples %d format %d flags 0x%x stride %td",
+                    bi.target, bi.width, bi.height, bi.depth, bi.levels, bi.samples, bi.format, bi.flags, bi.stride);
+    }
     return L.valid ? static_cast<size_t>(L.alignment) : 0;
 }
 
