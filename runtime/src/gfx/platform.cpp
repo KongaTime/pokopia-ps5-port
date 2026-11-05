@@ -529,7 +529,9 @@ bool move_to_display(int number) {
 bool set_relative_mouse(bool on) {
     if (!g_window) return false;
     if (!SDL_SetWindowRelativeMouseMode(g_window, on)) {
-        NXLOG_W(kTag, "set_relative_mouse(%d) failed: %s", on ? 1 : 0, SDL_GetError());
+        static bool warned = false;   // once: a window without a mouse (the console) refuses it every frame
+        if (!warned) NXLOG_W(kTag, "set_relative_mouse(%d) failed: %s (not logged again)", on ? 1 : 0, SDL_GetError());
+        warned = true;
         return false;
     }
     return true;

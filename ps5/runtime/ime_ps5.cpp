@@ -41,10 +41,9 @@ struct PkpImeDialogResult {         // SceImeDialogResult
     int32_t end_status;             // 0 OK, 1 cancelled, 2 aborted
     int8_t reserved[12];
 };
-int sceImeDialogInit(const PkpImeDialogParam* param, const void* extended);
-int sceImeDialogGetStatus(void);    // 0 none, 1 running, 2 finished
-int sceImeDialogGetResult(PkpImeDialogResult* result);
-int sceImeDialogTerm(void);
+int sceKernelLoadStartModule(const char* path, size_t args, const void* argp, uint32_t flags, void* opt, int* result);
+int sceKernelDlsym(int handle, const char* symbol, void** address);
+const char* sceKernelGetFsSandboxRandomWord(void);
 int sceUserServiceInitialize(const void*);
 int sceCommonDialogInitialize(void);   // libSceCommonDialog (ps5/stubs): before any system dialog
 int sceUserServiceGetInitialUser(int32_t* user);
@@ -85,6 +84,44 @@ std::string to_utf8(const char16_t* s) {
     return out;
 }
 
+// libSceImeDialog, loaded here: the title's import of it stayed unresolved (the third console try jumped to address 0 inside
+// sceImeDialogInit, on the thread that called it). The module is loaded from the system's library folder, under the title's
+// sandbox word, and its functions looked up by name.
+struct Ime {
+    int (*init)(const PkpImeDialogParam*, const void*) = nullptr;
+    int (*get_status)(void) = nullptr;   // 0 none, 1 running, 2 finished
+    int (*get_result)(PkpImeDialogResult*) = nullptr;
+    int (*term)(void) = nullptr;
+    bool ok = false;
+};
+const Ime& ime() {
+    static const Ime m = [] {
+        Ime r;
+        const char* word = sceKernelGetFsSandboxRandomWord();
+        std::string paths[] = {std::string("/") + (word ? word : "") + "/common/lib/libSceImeDialog.sprx",
+                               "/system/common/lib/libSceImeDialog.sprx"};
+        int h = -1;
+        for (const std::string& path : paths) {
+            h = sceKernelLoadStartModule(path.c_str(), 0, nullptr, 0, nullptr, nullptr);
+            NXLOG_I("am", "swkbd: console keyboard: load %s -> 0x%08x", path.c_str(), static_cast<unsigned>(h));
+            if (h >= 0) break;
+        }
+        if (h < 0) return r;
+        sceKernelDlsym(h, "sceImeDialogInit", reinterpret_cast<void**>(&r.init));
+        sceKernelDlsym(h, "sceImeDialogGetStatus", reinterpret_cast<void**>(&r.get_status));
+        sceKernelDlsym(h, "sceImeDialogGetResult", reinterpret_cast<void**>(&r.get_result));
+        sceKernelDlsym(h, "sceImeDialogTerm", reinterpret_cast<void**>(&r.term));
+        r.ok = r.init && r.get_status && r.get_result && r.term;
+        NXLOG_I("am", "swkbd: console keyboard: functions %s (init %p)", r.ok ? "found" : "missing", reinterpret_cast<void*>(r.init));
+        return r;
+    }();
+    return m;
+}
+#define sceImeDialogInit ime().init
+#define sceImeDialogGetStatus ime().get_status
+#define sceImeDialogGetResult ime().get_result
+#define sceImeDialogTerm ime().term
+
 // When the console keyboard cannot be used: [applet] swkbd_text (NXRT_APPLET_SWKBD_TEXT, e.g. in /app0/pkp-env.txt), else "Player".
 std::string fallback_name() { return nxrt::config_get_str("applet", "swkbd_text", "Player"); }
 
@@ -102,7 +139,7 @@ bool win32_prompt(const Request& r, std::string* text) {
 
     // A keyboard that cannot open at all (sceImeDialogInit that does not return: the second console try) is not asked again.
     static std::atomic<bool> broken{false};
-    if (broken.load()) {
+    if (broken.load() || !ime().ok) {
         *text = fallback_name();
         return true;
     }
