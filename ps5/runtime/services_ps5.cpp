@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // PS5 back ends of the runtime's Windows-only service pieces (ps5/PLAN.md, "Compat layer status"), first versions:
-//  - audio:      XAudio2 is not on the console; make_xaudio2_sink answers null, which the audio layer reads as "no device"
-//                and falls back from (audio_sink.h). The sceAudioOut sink comes with P4.
+//  - audio:      XAudio2 is not on the console; the sceAudioOut sink stands in for it (audio_ps5.cpp)
+//                (when the port cannot be opened the audio layer falls back to the null sink, audio_sink.h).
 //  - album:      caps:su's IScreenShotApplicationService without WIC: the commands are accepted and nothing is saved yet.
 //  - swkbd:      no native prompt window: the keyboard's text comes from [applet] swkbd_text, the game's initial text, or
 //                "Player" (services_api.h's order without the PC prompt). The console's IME dialog comes later.
@@ -15,7 +15,7 @@
 #include "../../runtime/src/services/services_internal.h"
 
 namespace nxrt::audio {
-std::shared_ptr<AudioSink> make_xaudio2_sink() { return nullptr; }
+// make_xaudio2_sink: the sceAudioOut sink, ps5/runtime/audio_ps5.cpp
 std::vector<OutputDevice> list_output_devices() { return {}; }   // MMDevice: no endpoint list on the console (one output)
 }  // namespace nxrt::audio
 
