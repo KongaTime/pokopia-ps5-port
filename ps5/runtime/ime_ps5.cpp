@@ -14,6 +14,7 @@
 #include <string>
 #include <thread>
 
+#include "nxrt/config.h"
 #include "nxrt/log.h"
 #include "nxrt/services_api.h"
 
@@ -84,6 +85,9 @@ std::string to_utf8(const char16_t* s) {
     return out;
 }
 
+// When the console keyboard cannot be used: [applet] swkbd_text (NXRT_APPLET_SWKBD_TEXT, e.g. in /app0/pkp-env.txt), else "Player".
+std::string fallback_name() { return nxrt::config_get_str("applet", "swkbd_text", "Player"); }
+
 }  // namespace
 
 bool win32_prompt(const Request& r, std::string* text) {
@@ -99,7 +103,7 @@ bool win32_prompt(const Request& r, std::string* text) {
     // A keyboard that cannot open at all (sceImeDialogInit that does not return: the second console try) is not asked again.
     static std::atomic<bool> broken{false};
     if (broken.load()) {
-        *text = "Player";
+        *text = fallback_name();
         return true;
     }
     struct Open {   // outlives this call when sceImeDialogInit hangs: the thread that calls it keeps it
@@ -139,7 +143,7 @@ bool win32_prompt(const Request& r, std::string* text) {
     if (!o->done.load()) {
         NXLOG_W("am", "swkbd: the console keyboard did not open in 20 s (sceImeDialogInit has not returned); answering \"Player\"");
         broken = true;
-        *text = "Player";
+        *text = fallback_name();
         return true;
     }
     const int rc = o->rc.load();
@@ -148,7 +152,7 @@ bool win32_prompt(const Request& r, std::string* text) {
     NXLOG_I("am", "swkbd: console keyboard: sceImeDialogInit -> 0x%08x, status %d", static_cast<unsigned>(rc), sceImeDialogGetStatus());
     if (rc < 0) {
         NXLOG_W("am", "swkbd: the console keyboard (sceImeDialogInit) failed: 0x%08x; answering \"Player\"", static_cast<unsigned>(rc));
-        *text = "Player";
+        *text = fallback_name();
         return true;
     }
     NXLOG_I("am", "swkbd: console keyboard open (\"%s\", up to %u characters)", to_utf8(title.c_str()).c_str(), max_len);
@@ -164,7 +168,7 @@ bool win32_prompt(const Request& r, std::string* text) {
     NXLOG_I("am", "swkbd: console keyboard: status %d, result 0x%08x, end status %d", status, static_cast<unsigned>(grc), res.end_status);
     if (status == 1) {
         sceImeDialogTerm();
-        *text = "Player";
+        *text = fallback_name();
         return true;
     }
     sceImeDialogTerm();

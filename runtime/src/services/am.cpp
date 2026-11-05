@@ -776,6 +776,9 @@ void swkbd_start(const std::shared_ptr<AppletState>& ap) {
         r.min_len = read_at<uint32_t>(*cfg, kCfgMinTextLength, 0);
         r.password = read_at<uint32_t>(*cfg, kCfgPasswordMode, 0) != 0;
         a.utf8 = read_at<uint8_t>(*cfg, kCfgUseUtf8, 0) != 0;
+        // The Switch 2 keyboard (library version 0x14xxxx) reads its answer as UTF-8 whatever the classic use_utf8 byte says:
+        // Pokopia's name entry showed "P" for a UTF-16 "Player" (the first byte, then the zero of its high half).
+        if (version >= 0x140000) a.utf8 = true;
         a.text_check = read_at<uint8_t>(*cfg, kCfgUseTextCheck, 0) != 0;
         r.ok_text = read_u16_text(*cfg, kCfgOkText, 9);
         r.header = read_u16_text(*cfg, kCfgHeaderText, 65);
