@@ -3,6 +3,7 @@
 // VkPipelineCache persists between runs ([nvn] pipeline_cache, default "pipeline_cache.bin").
 #include "nvn_pipeline.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -193,6 +194,129 @@ static VkShaderModule create_module(const std::vector<uint32_t>& words, const ch
             fixed.erase(fixed.begin() + static_cast<std::ptrdiff_t>(cap_at), fixed.begin() + static_cast<std::ptrdiff_t>(cap_at) + 2);
             code = &fixed;
         }
+    }
+    // [nvn] nan_minmax: Maxwell's FMNMX returns the operand that is not NaN and .SAT maps NaN to 0, but the translator emits
+    // GLSL.std.450 FMin/FMax/FClamp, whose result for a NaN operand is undefined. NVIDIA hardware drops the NaN as Maxwell does; AMD
+    // (RADV on the PS5, AMD PCs) lets it through, and it reaches the render targets as black (the sky's clouds on the PS5). NMin/NMax/
+    // NClamp have Maxwell's semantics: the instruction number is swapped in place (37/40/43 -> 79/80/81), same operands. `auto`
+    // (default): on for every GPU but NVIDIA; `on`, `off`. The same fix as tools/shaders spirv-nan.patch, for caches built without it.
+    static const bool nan_minmax = [] {
+        const std::string v = config_get_str("nvn", "nan_minmax", "auto");
+        const bool on = v == "on" || (v == "auto" && device().properties().vendorID != 0x10de);
+        NXLOG_I(kTag, "NaN-safe min/max/clamp in game shaders: %s ([nvn] nan_minmax = %s)", on ? "on" : "off", v.c_str());
+        return on;
+    }();
+    if (nan_minmax) {
+        const std::vector<uint32_t>& w = *code;
+        uint32_t glsl = 0;
+        size_t first = 0;
+        for (size_t i = 5; i < w.size();) {
+            const uint32_t op = w[i] & 0xffff, len = w[i] >> 16;
+            if (len == 0 || i + len > w.size()) break;
+            if (op == 11 && len >= 3 && std::strncmp(reinterpret_cast<const char*>(&w[i + 2]), "GLSL.std.450", (len - 2) * 4) == 0) glsl = w[i + 1];
+            if (op == 12 && len >= 5 && glsl && w[i + 3] == glsl && (w[i + 4] == 37 || w[i + 4] == 40 || w[i + 4] == 43)) {
+                first = i;
+                break;
+            }
+            i += len;
+        }
+        if (first) {
+            if (code != &fixed) {
+                fixed = w;
+                code = &fixed;
+            }
+            for (size_t i = first; i < fixed.size();) {
+                const uint32_t op = fixed[i] & 0xffff, len = fixed[i] >> 16;
+                if (len == 0 || i + len > fixed.size()) break;
+                if (op == 12 && len >= 5 && fixed[i + 3] == glsl) {
+                    uint32_t& ins = fixed[i + 4];
+                    ins = ins == 37 ? 79u : ins == 40 ? 80u : ins == 43 ? 81u : ins;
+                }
+                i += len;
+            }
+        }
+    }
+    // [nvn] clamp_sampled = "<shader hash prefix>:<binding>:<max>[,...]": in a matching module every read of the texture at that binding
+    // (OpImageSample*/OpImageFetch through it) is capped per component with NMin(value, max). A workaround for a shader whose maths breaks on
+    // inputs above what it was tuned for on the console (the PS5's black clouds: Pokopia's tone map b98b93ee given HDR values near 500).
+    static const auto clamps = [] {
+        struct C { std::string prefix; uint32_t binding; float max; };
+        std::vector<C> out;
+        const std::string spec = config_get_str("nvn", "clamp_sampled", "");
+        size_t i = 0;
+        while (i < spec.size()) {
+            size_t j = spec.find(',', i);
+            if (j == std::string::npos) j = spec.size();
+            const std::string item = spec.substr(i, j - i);
+            const size_t a = item.find(':'), b = a == std::string::npos ? a : item.find(':', a + 1);
+            if (b != std::string::npos)
+                out.push_back({item.substr(0, a), static_cast<uint32_t>(std::strtoul(item.c_str() + a + 1, nullptr, 10)),
+                               std::strtof(item.c_str() + b + 1, nullptr)});
+            i = j + 1;
+        }
+        return out;
+    }();
+    std::vector<uint32_t> clamped;
+    for (const auto& cl : clamps) {
+        if (!what || std::strncmp(what, cl.prefix.c_str(), cl.prefix.size()) != 0) continue;
+        const std::vector<uint32_t>& w = *code;
+        if (w.size() < 5) break;
+        uint32_t glsl = 0, var = 0, first_fn = 0;
+        std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> vec;   // vector type id -> (component type, count)
+        std::vector<uint32_t> loads;                                       // OpLoad results of the variable
+        for (size_t k = 5; k < w.size();) {
+            const uint32_t op = w[k] & 0xffff, len = w[k] >> 16;
+            if (len == 0 || k + len > w.size()) break;
+            if (op == 11 && len >= 3 && std::strncmp(reinterpret_cast<const char*>(&w[k + 2]), "GLSL.std.450", (len - 2) * 4) == 0) glsl = w[k + 1];
+            if (op == 71 && len >= 4 && w[k + 2] == 33 && w[k + 3] == cl.binding) var = w[k + 1];   // OpDecorate <id> Binding <n>
+            if (op == 23 && len >= 4) vec[w[k + 1]] = {w[k + 2], w[k + 3]};                          // OpTypeVector
+            if (op == 54 && !first_fn) first_fn = static_cast<uint32_t>(k);                          // OpFunction
+            if (op == 61 && len >= 4 && var && w[k + 3] == var) loads.push_back(w[k + 2]);            // OpLoad
+            k += len;
+        }
+        if (!glsl || !var || !first_fn || loads.empty()) break;
+        uint32_t bound = w[3];
+        const uint32_t cfloat = bound++;
+        std::unordered_map<uint32_t, uint32_t> cvec;   // vector type -> its constant
+        std::vector<uint32_t> consts, outw(w.begin(), w.begin() + first_fn);
+        bool any = false;
+        uint32_t float_type = 0;
+        for (const auto& [t, cc] : vec) { (void)t; float_type = cc.first; break; }
+        std::vector<uint32_t> body;
+        for (size_t k = first_fn; k < w.size();) {
+            const uint32_t op = w[k] & 0xffff, len = w[k] >> 16;
+            if (len == 0 || k + len > w.size()) { body.insert(body.end(), w.begin() + k, w.end()); break; }
+            const bool sample = (op == 87 || op == 88 || op == 95) && len >= 5 &&            // ImageSample(Im|Ex)plicitLod, ImageFetch
+                                std::find(loads.begin(), loads.end(), w[k + 3]) != loads.end() && vec.count(w[k + 1]);
+            if (!sample) { body.insert(body.end(), w.begin() + k, w.begin() + k + len); k += len; continue; }
+            const uint32_t rt = w[k + 1], res = w[k + 2], tmp = bound++;
+            auto it = cvec.find(rt);
+            if (it == cvec.end()) {
+                const uint32_t id = bound++;
+                consts.push_back((3u + vec[rt].second) << 16 | 44u);   // OpConstantComposite
+                consts.push_back(rt);
+                consts.push_back(id);
+                for (uint32_t c = 0; c < vec[rt].second; ++c) consts.push_back(cfloat);
+                it = cvec.emplace(rt, id).first;
+                float_type = vec[rt].first;
+            }
+            body.insert(body.end(), w.begin() + k, w.begin() + k + len);
+            body[body.size() - len + 2] = tmp;                                            // the sample now yields tmp
+            body.insert(body.end(), {7u << 16 | 12u, rt, res, glsl, 79u, tmp, it->second});   // res = NMin(tmp, max)
+            any = true;
+            k += len;
+        }
+        if (!any || !float_type) break;
+        uint32_t bits;
+        std::memcpy(&bits, &cl.max, 4);
+        outw.insert(outw.end(), {4u << 16 | 43u, float_type, cfloat, bits});   // OpConstant
+        outw.insert(outw.end(), consts.begin(), consts.end());
+        outw.insert(outw.end(), body.begin(), body.end());
+        outw[3] = bound;
+        clamped.swap(outw);
+        code = &clamped;
+        NXLOG_I(kTag, "shader %s: reads of binding %u capped at %g ([nvn] clamp_sampled)", what, cl.binding, static_cast<double>(cl.max));
+        break;
     }
     // [nvn] spirv_salt (measurement only): an OpSourceExtension with the salt in every module gives the driver a new shader hash, so a run
     // compiles every shader from scratch without touching the driver's own cache on disk.

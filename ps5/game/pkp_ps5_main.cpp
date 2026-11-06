@@ -386,6 +386,10 @@ int main() {
         // Translated shaders (<hash>.spv + results.tsv), made on a PC from the player's own romfs (pokopia-recomp's
         // extract_corpus.py and spirv_harness) and uploaded beside the game data.
         {"NXRT_NVN_SHADER_CACHE", "/shader_cache/spirv"},
+        // Frame traces on demand: uploading a file named pkp-trace traces the next frame into the log, with a screenshot and the
+        // render targets as PNGs in pkp-results/trace/ (runtime/docs/CONFIG.md [nvn] trace_trigger).
+        {"NXRT_NVN_TRACE_TRIGGER", "/pkp-trace"},
+        {"NXRT_NVN_TRACE_DIR", "/pkp-results/trace/"},
     };
     for (const auto& p : kPaths) setenv(p.env, (std::string(kGame) + p.path).c_str(), 0);
     // P3: the NVN back end on RADV, in a window that is the console's video output (SDL3's ps5 driver: VK_KHR_display).
@@ -416,6 +420,10 @@ int main() {
     // Audio: the device holds the game's queue plus this margin (runtime default 30 ms). Loading stalls the game's audio thread
     // for longer than that (about 20 underruns in the first 30 s of a console run at 30 ms); 80 ms covers them at little cost.
     setenv("NXRT_AUDIO_OUT_LATENCY_MS", "80", 0);
+    // The sky's clouds: they reach the HDR scene at ~500 (flat white), and the game's tone map (fragment shader b98b93ee) turned
+    // them black on the console's GPU while ordinary values (20..80) came out right; the NVIDIA PC build draws them white. Its nine
+    // reads of the scene (binding 129) are capped at 64, which still maps to white (runtime/docs/CONFIG.md [nvn] clamp_sampled).
+    setenv("NXRT_NVN_CLAMP_SAMPLED", "b98b93ee98f5d316:129:64", 0);
     // Bring-up switches, as files in the title folder (uploaded by FTP, no rebuild): /app0/pkp-debug (debug-level log) and
     // /app0/pkp-breadcrumbs (one line per compat kernel call, svc and HLE call in pkp-results/calls.txt). Both slow the game.
     struct stat sw;

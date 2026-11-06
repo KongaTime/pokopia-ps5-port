@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <map>
@@ -259,6 +260,13 @@ std::vector<int> g_trace_snap_draws;   // [nvn] trace_snap: draw numbers after w
 bool g_trace_snap_read = false;
 std::vector<std::string> g_trace_snap_fs;
 bool g_trace_snap_sampled = false;           // [nvn] trace_snap_sampled = 1: a snapshot draw also copies the textures that draw samples
+// [nvn] trace_dir: folder (with its trailing slash) for the PNGs a trace writes (snap_*, trace_t*, shot.png); empty: the working directory
+const std::string& trace_dir() {
+    static const std::string d = nxrt::config_get_str("nvn", "trace_dir", "");
+    return d;
+}
+void poll_trace_trigger_impl();   // [nvn] trace_trigger, below replay_request_trace
+void poll_trace_trigger() { poll_trace_trigger_impl(); }
 std::vector<Texture*> g_trace_sampled;       // textures sampled by the last traced draw
 std::vector<Ref<Texture>> g_trace_targets;   // the colour and depth targets drawn to in the traced frame, in order of first use
 int64_t g_trace_frame = -2;
@@ -328,6 +336,47 @@ void log_once(const char* key, const char* msg) {
 bool first_time_key(const std::string& key) {   // render thread only
     static std::unordered_map<std::string, bool> seen;
     return seen.size() < 4096 && seen.emplace(key, true).second;
+}
+
+// A vertex attribute format the GPU cannot fetch from a vertex buffer (VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT). NVIDIA fetches the 3-component 8-
+// and 16-bit formats; AMD may not, and a pipeline that uses one anyway reads nothing usable. Those take the 4-component format of the same
+// type: the first three components are the same bytes (the fourth is the next byte or half in the stream, wrong only for a shader that
+// reads a fourth component of a 3-component attribute, which the console would answer with 1). Render thread only.
+VkFormat widen_rgb(VkFormat f) {
+    switch (f) {
+        case VK_FORMAT_R8G8B8_UNORM: return VK_FORMAT_R8G8B8A8_UNORM;
+        case VK_FORMAT_R8G8B8_SNORM: return VK_FORMAT_R8G8B8A8_SNORM;
+        case VK_FORMAT_R8G8B8_USCALED: return VK_FORMAT_R8G8B8A8_USCALED;
+        case VK_FORMAT_R8G8B8_SSCALED: return VK_FORMAT_R8G8B8A8_SSCALED;
+        case VK_FORMAT_R8G8B8_UINT: return VK_FORMAT_R8G8B8A8_UINT;
+        case VK_FORMAT_R8G8B8_SINT: return VK_FORMAT_R8G8B8A8_SINT;
+        case VK_FORMAT_R16G16B16_UNORM: return VK_FORMAT_R16G16B16A16_UNORM;
+        case VK_FORMAT_R16G16B16_SNORM: return VK_FORMAT_R16G16B16A16_SNORM;
+        case VK_FORMAT_R16G16B16_USCALED: return VK_FORMAT_R16G16B16A16_USCALED;
+        case VK_FORMAT_R16G16B16_SSCALED: return VK_FORMAT_R16G16B16A16_SSCALED;
+        case VK_FORMAT_R16G16B16_UINT: return VK_FORMAT_R16G16B16A16_UINT;
+        case VK_FORMAT_R16G16B16_SINT: return VK_FORMAT_R16G16B16A16_SINT;
+        case VK_FORMAT_R16G16B16_SFLOAT: return VK_FORMAT_R16G16B16A16_SFLOAT;
+        default: return VK_FORMAT_UNDEFINED;
+    }
+}
+
+VkFormat vertex_format_supported(VkFormat f, int nvn_format, uint32_t shader_components) {
+    static std::unordered_map<int, bool> ok;
+    auto can = [](VkFormat x) {
+        auto it = ok.find(static_cast<int>(x));
+        if (it != ok.end()) return it->second;
+        VkFormatProperties fp = {};
+        vkGetPhysicalDeviceFormatProperties(device().physical(), x, &fp);
+        return ok[static_cast<int>(x)] = (fp.bufferFeatures & VK_FORMAT_FEATURE_VERTEX_BUFFER_BIT) != 0;
+    };
+    if (can(f)) return f;
+    const VkFormat w = widen_rgb(f);
+    const bool use = w != VK_FORMAT_UNDEFINED && can(w);
+    if (first_time_key("vtxfmt " + std::to_string(static_cast<int>(f)) + " " + std::to_string(shader_components)))
+        NXLOG_W(kTag, "vertex attribute format %d (NVN format %d, shader reads %u components) cannot be fetched by this GPU: %s", static_cast<int>(f),
+                nvn_format, shader_components, use ? ("read as format " + std::to_string(static_cast<int>(w))).c_str() : "used anyway (no substitute)");
+    return use ? w : f;
 }
 
 // ---- helpers ----------------------------------------------------------------------------------------------------------------
@@ -1776,6 +1825,7 @@ bool build_key(GraphicsKey& key, VkPrimitiveTopology topo) {
             if (loc < S.attr_count && loc < 16) {
                 a = &S.attr[loc];
                 f = vertex_format(a->format);
+                if (f != VK_FORMAT_UNDEFINED) f = vertex_format_supported(f, a->format, in.components);
             }
             if (f == VK_FORMAT_UNDEFINED) {
                 if (nmissing < 32) missing[nmissing++] = {loc, in.type};
@@ -2449,7 +2499,7 @@ void trace_snap_after_draw() {
         const int idx = snapshot_record(t, *F);
         if (idx < 0) return;
         char buf[96];
-        g_trace_snaps.push_back({idx, g_trace_n, std::string("snap_d") + std::to_string(g_trace_n) + "_t" + std::to_string(t->id) + "_" + (t->fmt ? t->fmt->name : "x") + ".png", tex_desc(t, buf, sizeof buf)});
+        g_trace_snaps.push_back({idx, g_trace_n, trace_dir() + "snap_d" + std::to_string(g_trace_n) + "_t" + std::to_string(t->id) + "_" + (t->fmt ? t->fmt->name : "x") + ".png", tex_desc(t, buf, sizeof buf)});
     };
     for (uint32_t i = 0; i < S.ncolor; ++i) take(S.color_tex[i].get());
     take(S.depth_tex.get());
@@ -3879,6 +3929,7 @@ void replay_begin_submit(Frame& f) {
             g_trace_frame = static_cast<int64_t>(counters().presents.load());
         }
     }
+    poll_trace_trigger();
     if (g_trace_req.exchange(false)) g_trace_frame = static_cast<int64_t>(counters().presents.load()) + 1;   // armed from a script (@shot nvntrace_*)
     g_trace = g_trace_frame >= 0 && static_cast<int64_t>(counters().presents.load()) == g_trace_frame;
     for (int64_t e : g_trace_extra) g_trace |= static_cast<int64_t>(counters().presents.load()) == e;
@@ -3934,6 +3985,61 @@ void replay_lists(Frame& f, const std::vector<Ref<CmdList>>& lists) {
 
 void replay_request_trace() { g_trace_req.store(true); }
 
+// [nvn] trace_trigger (NXRT_NVN_TRACE_TRIGGER): a file, looked for about twice a second. When it appears it is read and deleted, the next frame is
+// traced (as trace_frame does) and a screenshot is written to <trace_dir>shot.png. Lines of the file, all optional, replace the snapshot settings
+// for that trace: "snap=253,300" (trace_snap), "snapfs=f77f9d,e72811" (trace_snap_fs), "sampled=1" (trace_snap_sampled). For tracing a running
+// game on a machine without a keyboard (the PS5: the file is uploaded over FTP).
+namespace {   // the same unnamed namespace as the declaration near the top
+void poll_trace_trigger_impl() {
+    static const std::string path = nxrt::config_get_str("nvn", "trace_trigger", "");
+    static auto last = std::chrono::steady_clock::now();
+    if (path.empty()) return;
+    const auto now = std::chrono::steady_clock::now();
+    if (now - last < std::chrono::milliseconds(500)) return;
+    last = now;
+    std::FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) return;
+    std::string text;
+    char buf[512];
+    size_t n;
+    while ((n = std::fread(buf, 1, sizeof buf, f)) > 0) text.append(buf, n);
+    std::fclose(f);
+    std::remove(path.c_str());
+    auto list = [](const std::string& v, auto add) {
+        size_t i = 0;
+        while (i < v.size()) {
+            size_t j = v.find(',', i);
+            if (j == std::string::npos) j = v.size();
+            if (j > i) add(v.substr(i, j - i));
+            i = j + 1;
+        }
+    };
+    g_trace_snap_read = true;   // the file's settings replace [nvn] trace_snap*
+    g_trace_snap_draws.clear();
+    g_trace_snap_fs.clear();
+    g_trace_snap_sampled = false;
+    size_t i = 0;
+    while (i < text.size()) {
+        size_t j = text.find('\n', i);
+        if (j == std::string::npos) j = text.size();
+        std::string line = text.substr(i, j - i);
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+        if (line.rfind("snap=", 0) == 0) list(line.substr(5), [](const std::string& x) { g_trace_snap_draws.push_back(std::atoi(x.c_str())); });
+        else if (line.rfind("snapfs=", 0) == 0) list(line.substr(7), [](const std::string& x) { g_trace_snap_fs.push_back(x); });
+        else if (line == "sampled=1") g_trace_snap_sampled = true;
+        i = j + 1;
+    }
+    if (!trace_dir().empty()) {
+        std::error_code ec;
+        std::filesystem::create_directories(trace_dir(), ec);
+    }
+    g_trace_frame = static_cast<int64_t>(counters().presents.load()) + 1;
+    if (gfx::Renderer* r = renderer()) r->request_screenshot(trace_dir() + "shot.png");
+    NXLOG_I("nvn.trace", "trace trigger %s: tracing frame %lld (%zu snapshot draws, %zu shader prefixes)", path.c_str(), static_cast<long long>(g_trace_frame),
+            g_trace_snap_draws.size(), g_trace_snap_fs.size());
+}
+}  // namespace
+
 void trace_dump_targets() {
     for (const TraceSnap& sn : g_trace_snaps) {
         std::string stats;
@@ -3947,7 +4053,7 @@ void trace_dump_targets() {
     for (const Ref<Texture>& t : list) {
         char buf[96];
         std::string stats;
-        const std::string png = std::string("trace_t") + std::to_string(t->id) + "_" + (t->fmt ? t->fmt->name : "x") + ".png";
+        const std::string png = trace_dir() + "trace_t" + std::to_string(t->id) + "_" + (t->fmt ? t->fmt->name : "x") + ".png";
         const bool ok = dump_texture(t.get(), png, &stats);
         NXLOG_I("nvn.trace", "target %s -> %s: %s", tex_desc(t.get(), buf, sizeof buf), ok ? png.c_str() : "(not dumped)", ok ? stats.c_str() : "");
     }
