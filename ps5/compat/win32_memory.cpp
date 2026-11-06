@@ -23,12 +23,21 @@
 #include <ps5platform/shm.h>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <map>
 #include <mutex>
 #include <vector>
 
 namespace ps5compat {
 namespace {
+std::atomic<uint64_t> g_back_ns[4], g_back_bytes{0};   // touch_stats
+struct BackTimer {
+    int slot;
+    std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+    explicit BackTimer(int s) : slot(s) {}
+    ~BackTimer() { g_back_ns[slot] += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count()); }
+};
 
 constexpr uint64_t kWinPage = 0x1000;
 constexpr uint64_t kConsolePage = PS5_KERNEL_PAGE_SIZE;           // 0x4000
@@ -204,6 +213,27 @@ bool map_unit(Section &s, size_t unit, const Alloc &v) {
     return r == 0;
 }
 
+// map_unit for the units [u0, u1) of a new view, a run of units whose direct memory is consecutive (back_units allocates
+// them that way) in one call. A view of an 80 MiB pool chunk was 1,280 calls of map_unit, a large part of the ~150 ms its
+// import took on the render thread (the stutter where an area first draws).
+bool map_units(Section &s, size_t u0, size_t u1, const Alloc &v) {
+    for (size_t u = u0; u < u1;) {
+        if (s.units[u] < 0) { ++u; continue; }
+        size_t e = u + 1;
+        while (e < u1 && s.units[e] >= 0 && s.units[e] == s.units[e - 1] + int64_t(kUnit)) ++e;
+        const uint64_t off0 = uint64_t(u) * kUnit, off1 = uint64_t(e) * kUnit;
+        const uint64_t lo = std::max(off0, v.offset), hi = std::min(off1, v.offset + v.size);
+        if (lo < hi) {
+            void *at = reinterpret_cast<void *>(v.base + (lo - v.offset));
+            if (sceKernelMapDirectMemory(&at, up(hi - lo, kConsolePage), PS5_KERNEL_PROT_CPU_READ | PS5_KERNEL_PROT_CPU_WRITE | kGpuRW,
+                                         PS5_KERNEL_MAP_FIXED, s.units[u] + int64_t(lo - off0), 0) != 0)
+                return false;
+        }
+        u = e;
+    }
+    return true;
+}
+
 // Sets or clears the backed bit of the pages [start, end), keeping their state and protection.
 void mark_backed(uint64_t start, uint64_t end, bool backed) {
     for (uint64_t a = start; a < end; a += kWinPage) {
@@ -285,7 +315,10 @@ bool back_units(Section &s, size_t u0, size_t u1) {
         while (e < u1 && e - u < kMaxRun && s.units[e] < 0) ++e;
         const uint64_t bytes = uint64_t(e - u) * kUnit;
         int64_t phys = 0;
-        if (e - u == 1 || sceKernelAllocateDirectMemory(0, sceKernelGetDirectMemorySize(), bytes, kUnit, 0, &phys) != 0) {
+        int arc;
+        { BackTimer bt(0); arc = e - u == 1 ? -1 : sceKernelAllocateDirectMemory(0, sceKernelGetDirectMemorySize(), bytes, kUnit, 0, &phys); }
+        g_back_bytes += bytes;
+        if (arc != 0) {
             for (size_t k = u; k < e; ++k)
                 if (!back_unit(s, k)) return false;
             u = e;
@@ -294,6 +327,7 @@ bool back_units(Section &s, size_t u0, size_t u1) {
         // Zeroed before any view shows it (released direct memory comes back with its old contents): through a private
         // mapping, so no thread sees the run before it is clean or loses a write to a late memset.
         {
+            BackTimer bt(1);
             void *tmp = nullptr;
             if (sceKernelMapDirectMemory(&tmp, bytes, PS5_KERNEL_PROT_CPU_READ | PS5_KERNEL_PROT_CPU_WRITE, 0, phys, kUnit) != 0) {
                 sceKernelReleaseDirectMemory(phys, bytes);
@@ -308,6 +342,7 @@ bool back_units(Section &s, size_t u0, size_t u1) {
         for (size_t k = u; k < e; ++k) s.units[k] = phys + int64_t(k - u) * int64_t(kUnit);
         const uint64_t off0 = uint64_t(u) * kUnit, off1 = uint64_t(e) * kUnit;
         bool zeroed = true;
+        auto t_map = std::chrono::steady_clock::now();
         for (Alloc *v : s.views) {
             const uint64_t lo = std::max(off0, v->offset), hi = std::min(off1, v->offset + v->size);
             if (lo >= hi) continue;
@@ -330,6 +365,8 @@ bool back_units(Section &s, size_t u0, size_t u1) {
                         break;
                     }
                 }
+        auto t_prot = std::chrono::steady_clock::now();
+        g_back_ns[2] += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(t_prot - t_map).count());
         for (Alloc *v : s.views) {
             const uint64_t lo = std::max(off0, v->offset), hi = std::min(off1, v->offset + v->size);
             if (lo >= hi) continue;
@@ -337,6 +374,7 @@ bool back_units(Section &s, size_t u0, size_t u1) {
             mark_backed(a, b, true);
             apply_new(a, b);
         }
+        g_back_ns[3] += uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t_prot).count());
         u = e;
     }
     return true;
@@ -382,6 +420,11 @@ bool section_fault(uint64_t addr) {
     back_view_page(addr);
     const uint8_t e = get(addr);   // backed now, or by another thread that faulted on the same unit first
     return state_of(e) == kCommitted && view_of(e) && backed_of(e);
+}
+
+void touch_stats(double out[5]) {
+    for (int i = 0; i < 4; ++i) out[i] = double(g_back_ns[i].exchange(0)) / 1e6;
+    out[4] = double(g_back_bytes.exchange(0));
 }
 
 void touch(const void *p, size_t n) {
@@ -664,11 +707,10 @@ LPVOID MapViewOfFileEx(HANDLE mapping, DWORD access, DWORD offset_high, DWORD of
     retain(s);   // a view keeps its section
     s->views.push_back(&v);
     set_range(base, base + span, entry(kReserved, kNone, true, false));
-    for (size_t u = off / kUnit; u < up(off + size, kUnit) / kUnit; ++u)
-        if (s->units[u] >= 0 && !map_unit(*s, u, v)) {
-            SetLastError(ERROR_NOT_ENOUGH_MEMORY);
-            return nullptr;
-        }
+    if (!map_units(*s, off / kUnit, up(off + size, kUnit) / kUnit, v)) {
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return nullptr;
+    }
     // Pages the section has committed are committed in the new view, with its access. (A SEC_COMMIT section's pages,
     // marked 2, are committed here at their first view.)
     for (uint64_t p = off / kWinPage; p < (off + size) / kWinPage;) {
@@ -682,7 +724,16 @@ LPVOID MapViewOfFileEx(HANDLE mapping, DWORD access, DWORD offset_high, DWORD of
             for (uint64_t k = p; k < q; ++k)   // backed where the section unit already has memory
                 set_range(base + (k * kWinPage - off), base + ((k + 1) * kWinPage - off),
                           entry(kCommitted, v.access, true, s->units[k * kWinPage / kUnit] >= 0));
-            apply(base + (p * kWinPage - off), base + (q * kWinPage - off));
+            // Nobody sees the view before it is returned: its protections go in as few calls as they allow (apply_new),
+            // where apply set them one 16 KiB page at a time (5,120 calls for a pool chunk's view).
+            // Only the stretches whose units have memory: the others are not mapped in the view (an mprotect over them fails).
+            for (uint64_t k = p; k < q;) {
+                const bool backed = s->units[k * kWinPage / kUnit] >= 0;
+                uint64_t r = k + 1;
+                while (r < q && (s->units[r * kWinPage / kUnit] >= 0) == backed) ++r;
+                if (backed) apply_new(base + (k * kWinPage - off), base + (r * kWinPage - off));
+                k = r;
+            }
         }
         p = q;
     }

@@ -414,6 +414,9 @@ bool seh_guard_call(void (*fn)(void *), void *arg);
 // Backs any committed section pages in [p, p + n) that have no memory yet (they are backed on first touch, which the
 // kernel does not do for a buffer handed to it: read() into one fails with EFAULT instead).
 void touch(const void *p, size_t n);
+// Time spent backing section memory since the last call, in ms: [0] allocating direct memory, [1] zeroing (temporary
+// mapping, memset, unmap), [2] mapping into the views, [3] protections and the page table; [4] bytes backed. Reset by the call.
+void touch_stats(double out[5]);
 template <class F>
 bool seh_guard(F &&f) {
     return seh_guard_call([](void *p) { (*static_cast<F *>(p))(); }, &f);

@@ -27,7 +27,7 @@
 #include "nvn_mirror_cap.h"
 
 #ifdef __PROSPERO__
-namespace ps5compat { void touch(const void* p, size_t n); }   // ps5/compat/win32_memory.cpp
+namespace ps5compat { void touch(const void* p, size_t n); void touch_stats(double out[5]); }   // ps5/compat/win32_memory.cpp
 #endif
 
 namespace nxrt::nvn::be {
@@ -125,7 +125,17 @@ bool import_range(PoolGpu* g, PoolChunk& c, uint64_t off, uint64_t size, const c
 #ifdef __PROSPERO__
     // The console's compat layer backs section memory on first touch (ps5/compat/win32_memory.cpp), and the GPU does
     // not touch it the CPU way: every page of the range gets its memory before the driver pins it.
-    ps5compat::touch(import_ptr, size);
+    {
+        double st[5];
+        ps5compat::touch_stats(st);   // reset
+        const auto t0 = std::chrono::steady_clock::now();
+        ps5compat::touch(import_ptr, size);
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        ps5compat::touch_stats(st);
+        if (ms >= 20.0)
+            NXLOG_I(kTag, "pool %s %zu of %zu: backing %.0f MiB of section memory took %.1f ms (direct memory %.1f, zeroing %.1f, view mappings %.1f, "
+                    "protections %.1f)", what, index, count, st[4] / 1048576.0, ms, st[0], st[1], st[2], st[3]);
+    }
 #endif
     VkMemoryHostPointerPropertiesEXT hp = {VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT};
     VkResult r;
