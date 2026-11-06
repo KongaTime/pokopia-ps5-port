@@ -40,7 +40,7 @@ done
 
 step "[1/7] tools and settings"
 pkp_need PS5_SDK PS5_VULKAN_DIR PKP_BUILD PKP_AGC_STUBS PKP_SDL3_INCLUDE PKP_SDL3_LIB
-for t in cmake ninja curl unzip sha256sum; do command -v "$t" >/dev/null || fail "$t is not installed"; done
+for t in cmake ninja curl unzip sha256sum nasm make; do command -v "$t" >/dev/null || fail "$t is not installed"; done
 python=${PKP_PYTHON:-python3}
 "$python" -c 'import sys; assert sys.version_info >= (3, 11)' 2>/dev/null || fail "$python is not Python 3.11 or newer (PKP_PYTHON)"
 [[ -x $PS5_SDK/bin/prospero-clang ]] || fail "no PS5 SDK at $PS5_SDK"
@@ -60,10 +60,12 @@ print('    2.0.1a (main build %s...)' % bid[:16])
 PY
 for m in rtld sdk subsdk0; do [[ -f $dump/exefs/$m ]] || fail "no exefs/$m in the dump"; done
 
-step "[3/7] graphics sources"
+step "[3/7] graphics sources and the movie decoder"
 deps=${PKP_DEPS:-$PKP_BUILD/deps}
 if [[ -d $deps/volk && -d $deps/vma && -d $deps/imgui && -d $deps/vulkan_headers ]]; then echo "    already there: $deps"
 else bash "$here/tools/fetch-deps.sh" "$deps"; fi
+if [[ -f $deps/libvpx/lib/libvpx.a ]]; then echo "    libvpx already built"
+else bash "$here/tools/build-libvpx.sh" "$deps/libvpx"; fi
 
 step "[4/7] lift the game"
 lift=${PKP_LIFT:-$PKP_BUILD/game-lift}

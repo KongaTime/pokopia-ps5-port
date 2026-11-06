@@ -112,7 +112,7 @@ mkdir -p "$stubs"
 
 echo "==> [1/4] build"
 cmake -S "$ps5" -B "$build" -G Ninja -DCMAKE_TOOLCHAIN_FILE="$sdk/toolchain/prospero.cmake" -DCMAKE_BUILD_TYPE=Release \
-    -DPKP_LIFT="$lift" -DPKP_DEPS="$deps" -DPKP_BUILD_DIR="$work" -DPKP_AGC_STUBS="$agc" -DPKP_RADV_ARCHIVE="$radv"     -DPKP_SDL3_INCLUDE="$PKP_SDL3_INCLUDE" -DPKP_SDL3_LIB="$PKP_SDL3_LIB" >/dev/null
+    -DPKP_LIFT="$lift" -DPKP_DEPS="$deps" -DPKP_BUILD_DIR="$work" -DPKP_AGC_STUBS="$agc" -DPKP_RADV_ARCHIVE="$radv"     -DPKP_SDL3_INCLUDE="$PKP_SDL3_INCLUDE" -DPKP_SDL3_LIB="$PKP_SDL3_LIB" -DPKP_LIBVPX="${PKP_LIBVPX:-$deps/libvpx}" >/dev/null
 cmake --build "$build" --target pokopia_ps5 -j "${JOBS:-3}"
 
 echo "==> [2/4] convert and sign"

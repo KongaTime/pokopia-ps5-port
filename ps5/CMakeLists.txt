@@ -34,6 +34,18 @@ target_include_directories(nxrt PUBLIC "${ROOT}/runtime/include" "${ROOT}/recomp
                            PRIVATE "${ROOT}/runtime/src" "${ROOT}/runtime/third_party")
 target_compile_options(nxrt PRIVATE -O2 -g1 -w -fno-omit-frame-pointer -mcx16 -ffp-contract=off)
 target_link_libraries(nxrt PUBLIC ps5compat)
+# libvpx for the games' VP8/VP9 movies (src/media/video_codec.cpp; the PC build takes vcpkg's): ps5/tools/build-libvpx.sh
+# builds it with the PS5 toolchain into this prefix. Without it the runtime builds without the decoders and movies are skipped.
+set(PKP_LIBVPX "" CACHE PATH "ps5/tools/build-libvpx.sh install prefix (include/vpx, lib/libvpx.a)")
+if(PKP_LIBVPX AND EXISTS "${PKP_LIBVPX}/lib/libvpx.a")
+    target_include_directories(nxrt PRIVATE "${PKP_LIBVPX}/include")
+    target_compile_definitions(nxrt PRIVATE NXRT_HAVE_LIBVPX=1)
+    target_link_libraries(nxrt PUBLIC "${PKP_LIBVPX}/lib/libvpx.a")
+    message(STATUS "pokopia-ps5: libvpx ${PKP_LIBVPX} (movies)")
+else()
+    target_compile_definitions(nxrt PRIVATE NXRT_HAVE_LIBVPX=0)
+    message(STATUS "pokopia-ps5: no libvpx (run ps5/tools/build-libvpx.sh): movies are left out")
+endif()
 
 # ---- lifted modules: one static library per folder of a make_cases.py (or game) output ----
 function(ps5_lifted_module target dir)
