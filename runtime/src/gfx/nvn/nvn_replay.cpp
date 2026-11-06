@@ -2841,6 +2841,13 @@ void do_dispatch(uint32_t x, uint32_t y, uint32_t z, uint64_t indirect) {
                     for (uint32_t i = 0; i < 64; ++i) { char t[16]; std::snprintf(t, sizeof t, " %08x", w[i]); words += t; }
                 }
                 TRACE("    cs b%u %s type %d -> %s @%p:%s", d.binding, b.name.c_str(), static_cast<int>(d.type), tex_desc(r.tex, c, sizeof c), r.tex ? static_cast<void*>(r.tex->mem) : nullptr, words.c_str());
+                // an image a dispatch writes (auto exposure, histograms): dumped from the GPU with the targets at the end of the frame (its
+                // game-memory copy above is not where the GPU puts the result)
+                if (img && r.tex) {
+                    bool seen = false;
+                    for (const Ref<Texture>& t : g_trace_targets) seen |= t.get() == r.tex;
+                    if (!seen) g_trace_targets.push_back(Ref<Texture>::share(r.tex));
+                }
             }
         }
     }
