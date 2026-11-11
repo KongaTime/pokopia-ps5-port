@@ -28,6 +28,7 @@
 #include "nxrt/gfx_tuning.h"
 #include "nxrt/log.h"
 #include "nvn_decoded.h"
+#include "nvn_driver_bank.h"
 #include "nvn_devcmd.h"
 #include "nvn_enums.h"
 #include "nvn_format.h"
@@ -72,7 +73,10 @@ struct GState {
     uint32_t nvp = 0;
     int32_t sc[16][4] = {};
     uint32_t nsc = 0;
-    float dr[16][2] = {};
+    // near/far per viewport; NVN's default range is 0..1. A game-set 0..0 is a real range (the sky dome, the placement indicator's
+    // outline and fill pin themselves to depth 0 with it), so it is passed through, never widened. From Recompia 511b490 (GPL-3.0).
+    float dr[16][2] = {{0, 1}, {0, 1}, {0, 1}, {0, 1}, {0, 1}, {0, 1}, {0, 1}, {0, 1},
+                       {0, 1}, {0, 1}, {0, 1}, {0, 1}, {0, 1}, {0, 1}, {0, 1}, {0, 1}};
     bool depth_bounds = false;
     float db_near = 0, db_far = 1;
     uint32_t stencil_ref[2] = {0, 0}, stencil_vmask[2] = {0xff, 0xff}, stencil_wmask[2] = {0xff, 0xff};
@@ -143,6 +147,9 @@ VkPipeline g_bound_pipeline = VK_NULL_HANDLE;
 UploadAlloc g_support;
 UploadAlloc g_draw_support;     // the support buffer the next descriptor sets bind: g_support, or one with render scales (support_for_draw)
 std::unordered_map<uint64_t, UploadAlloc> g_support_scaled;   // this submission's support buffers with render scales, by content
+std::unordered_map<uint64_t, UploadAlloc> g_driver_banks;     // this submission's filled c[0] banks (driver_bank_for), by content
+uint32_t g_draw_base_instance = 0;   // the base instance of the draw being set up, for graphics c[0] + 0x644 (0 for indirect draws)
+uint32_t g_bank_base_instance = 0;   // the one the bound descriptor sets hold
 MaskClear g_mask;
 bool g_mask_ready = false, g_mask_ok = false;
 
@@ -678,8 +685,8 @@ void set_viewports_and_scissors() {
         // Upper-left origin: window y is the image row from the top and NDC +y is the top edge of the rectangle (negative height).
         // Lower-left origin (the GL convention): window y 0 is memory row 0 and NDC -y is the first row, so no flip.
         const bool lower_left = S.window_origin == NVN_WINDOW_ORIGIN_MODE_LOWER_LEFT;
-        vp[i] = lower_left ? VkViewport{x, y, w, h, S.dr[i][0], S.dr[i][1] == 0.0f && S.dr[i][0] == 0.0f ? 1.0f : S.dr[i][1]}
-                           : VkViewport{x, y + h, w, -h, S.dr[i][0], S.dr[i][1] == 0.0f && S.dr[i][0] == 0.0f ? 1.0f : S.dr[i][1]};
+        vp[i] = lower_left ? VkViewport{x, y, w, h, S.dr[i][0], S.dr[i][1]}
+                           : VkViewport{x, y + h, w, -h, S.dr[i][0], S.dr[i][1]};
         if (i < S.nsc) {
             int32_t r[4];
             bool exact = true;
@@ -1459,6 +1466,39 @@ bool tsr_jitter(uint32_t* words, size_t n_words) {
     return extras::temporal_jitter_block(words, n_words, e.width, e.height, g_tsr_frame);
 }
 
+// c[0] of a stage that reads it, filled from the current bindings (nvn_driver_bank.h; from Recompia c33d6d4 / 07f7ba7): a Switch 2
+// compute program's resource table (storage buffer sizes for the bounds checks of the light culling, GPU particle and volume field
+// kernels); a graphics stage's storage buffer table, point size and the draw's base instance. Copied into the upload ring once per
+// distinct content per submission. A stage the fill does not cover (Switch 1 compute) gets the shared bank (zeros, point size).
+VkDescriptorBufferInfo driver_bank_for(const BindingDesc& d) {
+    VkDeviceSize range = 0;
+    VkBuffer shared = driver_constants_buffer(&range);
+    VkDescriptorBufferInfo bi = {shared ? shared : dummy_buffer(), 0, shared ? range : 65536};
+    const ShaderControl& c = d.shader->control;
+    const bool compute = d.nvn_stage == kCompute;
+    if (compute && (!c.nvn2 || c.stage != 5)) return bi;
+    if (d.nvn_stage < 0 || d.nvn_stage > kCompute) return bi;
+    uint8_t bank[kDriverBankBytes];
+    DriverRange ubo[16], ssbo[16];
+    for (int n = 0; n < 16; ++n) {
+        ubo[n] = {S.ubo[d.nvn_stage][n].addr, S.ubo[d.nvn_stage][n].size};
+        ssbo[n] = {S.ssbo[d.nvn_stage][n].addr, S.ssbo[d.nvn_stage][n].size};
+    }
+    const uint32_t used = compute ? fill_driver_bank_nvn2_compute(bank, c, ubo, ssbo, S.tex[kCompute], S.img[kCompute])
+                                  : fill_driver_bank_graphics(bank, d.nvn_stage, ssbo, g_draw_base_instance);
+    uint64_t key = 1469598103934665603ull ^ used;
+    for (uint32_t i = 0; i < used; ++i) key = (key ^ bank[i]) * 1099511628211ull;
+    auto it = g_driver_banks.find(key);
+    if (it == g_driver_banks.end()) {
+        const VkDeviceSize align = std::max<VkDeviceSize>(device().properties().limits.minUniformBufferOffsetAlignment, 256);
+        UploadAlloc u = F->upload(kDriverBankBytes, align);
+        if (!u) return bi;
+        std::memcpy(u.ptr, bank, kDriverBankBytes);
+        it = g_driver_banks.emplace(key, u).first;
+    }
+    return {it->second.buffer, it->second.offset, kDriverBankBytes};
+}
+
 VkDescriptorSet build_set(const ProgLayout& pl, uint32_t set) {
     std::vector<VkWriteDescriptorSet> writes;
     std::vector<VkDescriptorBufferInfo> binfo;
@@ -1485,12 +1525,9 @@ VkDescriptorSet build_set(const ProgLayout& pl, uint32_t set) {
                     bi = g_draw_support ? VkDescriptorBufferInfo{g_draw_support.buffer, g_draw_support.offset, sizeof(SupportBuffer)}
                                         : VkDescriptorBufferInfo{g_support.buffer, g_support.offset, sizeof(SupportBuffer)};
                     break;
-                case NvnSource::DriverConstants: {
-                    VkDeviceSize range = 0;
-                    VkBuffer buf = driver_constants_buffer(&range);
-                    if (buf) bi = {buf, 0, range};
+                case NvnSource::DriverConstants:
+                    bi = driver_bank_for(d);
                     break;
-                }
                 case NvnSource::ConstantData: {
                     VkDeviceSize range = 0;
                     VkBuffer buf = constant_data_buffer(d.shader, &range);
@@ -2239,6 +2276,7 @@ bool begin_draw(int mode, bool indexed, int index_type, VkPrimitiveTopology* top
     }
     const ProgLayout* pl = g_pl;
     if (!pl) return false;
+    if (pl->c0_graphics && g_draw_base_instance != g_bank_base_instance) g_dirty |= kDesc;   // c[0] + 0x644 changed: new sets
     if (extras::temporal_wanted()) temporal_gbuffer_note();
     if (g_dirty & (kDesc | kPipe)) {
         g_prog_writes = false;
@@ -2412,6 +2450,7 @@ bool begin_draw(int mode, bool indexed, int index_type, VkPrimitiveTopology* top
     if (g_dirty & kDesc) {
         support_for_draw(*pl, false);
         bind_sets(*pl, VK_PIPELINE_BIND_POINT_GRAPHICS);
+        g_bank_base_instance = g_draw_base_instance;
     }
     if (pl->push_bytes && g_gen_tcs) {
         // the pass-through control shader's tessellation levels (NVN's fixed SetInner/OuterTessellationLevels), every draw: cheap, and
@@ -2552,6 +2591,7 @@ bool bind_u32_indices(const std::vector<uint32_t>& idx) {
 }
 
 void do_draw_arrays(const P_DrawArrays& p) {
+    g_draw_base_instance = p.base_instance;
     count_primitives(p.mode, p.count, p.instance_count);
     VkPrimitiveTopology topo;
     if (!begin_draw(static_cast<int>(p.mode), false, 0, &topo)) { counters().draws_skipped.fetch_add(1); return; }
@@ -2575,6 +2615,7 @@ void do_draw_arrays(const P_DrawArrays& p) {
 }
 
 void do_draw_elements(const P_DrawElements& p) {
+    g_draw_base_instance = p.base_instance;
     count_primitives(p.mode, p.count, p.instance_count);
     VkPrimitiveTopology topo;
     if (!begin_draw(static_cast<int>(p.mode), true, static_cast<int>(p.type), &topo)) { counters().draws_skipped.fetch_add(1); return; }
@@ -2740,6 +2781,7 @@ void draw_indirect_cpu(const P_DrawIndirect& p, PrimConversion conv, uint32_t is
 }
 
 void do_draw_indirect(const P_DrawIndirect& p) {
+    g_draw_base_instance = 0;   // in the arguments (the GPU may write them): not known here
     const bool indexed = p.type != 0xffffffffu;
     VkPrimitiveTopology topo;
     if (!begin_draw(static_cast<int>(p.mode), indexed, indexed ? static_cast<int>(p.type) : 0, &topo)) { counters().draws_skipped.fetch_add(1); return; }
@@ -2779,6 +2821,7 @@ void do_draw_indirect(const P_DrawIndirect& p) {
 // (vkCmdDrawIndirectByteCountEXT over the section's byte counter, divided by the stride of the vertex stream that reads the feedback buffer). The game
 // binds the feedback buffer as an ordinary vertex buffer. The feedback writes are ordered before the vertex fetch by ending the pass first.
 void do_draw_xfb(const P_DrawXfb& p) {
+    g_draw_base_instance = 0;   // vkCmdDrawIndirectByteCountEXT draws from instance 0
     static bool noted = false;
     if (!noted) { noted = true; NXLOG_I("nvn.xfb", "replay: transform feedback draw (first): mode %u control %llx", p.mode, static_cast<unsigned long long>(p.control)); }
     if (!S.render_enable) return;
@@ -3977,6 +4020,7 @@ void replay_begin_submit(Frame& f) {
     // one support buffer per submission (Ryujinx SupportBuffer: render scales 1.0, no BGRA remap)
     g_support = f.upload(sizeof(SupportBuffer), 256);
     g_support_scaled.clear();
+    g_driver_banks.clear();
     g_draw_support = UploadAlloc();
     if (g_support) {
         SupportBuffer sb = support_buffer_defaults();

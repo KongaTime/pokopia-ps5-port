@@ -524,6 +524,8 @@ const ProgLayout* prog_layout(const ShaderInfo* const stages[6]) {
             }
         }
     }
+    for (const BindingDesc& d : pl.bindings)
+        pl.c0_graphics |= d.nvn_stage != 5 && d.shader->refl.bindings[d.index].nvn.source == NvnSource::DriverConstants;
     std::vector<VkDescriptorSetLayoutBinding> lbs[4];
     std::string sig;                                   // the descriptors of the program, as bytes: the key of the shared layout
     for (int set = 0; set < 4; ++set) {
@@ -702,6 +704,7 @@ VkPipeline build_graphics_pipeline(const GraphicsKey& key, const ProgLayout& lay
     for (int i = 0; i < 5; ++i) {
         if (!sm.m[i]) continue;
         stages[ns] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+        stages[ns].pNext = subgroup32_info(bits[i]);
         stages[ns].stage = bits[i];
         stages[ns].module = sm.m[i];
         stages[ns].pName = "main";
@@ -866,6 +869,8 @@ VkPipeline compute_pipeline(const ShaderInfo* cs, const ProgLayout& layout) {
         VkComputePipelineCreateInfo ci = {VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
         ci.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
         ci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        ci.stage.pNext = subgroup32_info(VK_SHADER_STAGE_COMPUTE_BIT,
+                                         uint64_t{cs->refl.local_size[0]} * cs->refl.local_size[1] * cs->refl.local_size[2]);
         ci.stage.module = m;
         ci.stage.pName = "main";
         ci.layout = layout.layout;
@@ -1044,5 +1049,35 @@ struct PipelineGauges {
 };
 PipelineGauges g_pipeline_gauges;
 }  // namespace
+
+const void* subgroup32_info(VkShaderStageFlagBits stage, uint64_t compute_invocations) {
+    static const VkPipelineShaderStageRequiredSubgroupSizeCreateInfo k32 = {
+        VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO, nullptr, 32};
+    // [nvn] subgroup32 = 0: never ask (the driver's own width)
+    static const bool on = config_get_bool("nvn", "subgroup32", true);
+    const gfx::DeviceLimitsExt& l = device().limits_ext();
+    const bool needed = on && l.subgroup_size != 32;
+    const bool can = l.subgroup_size_control && l.min_subgroup_size <= 32 && 32 <= l.max_subgroup_size;
+    static std::once_flag logged;
+    std::call_once(logged, [&] {
+        if (!needed) return;
+        const uint32_t game = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_GEOMETRY_BIT |
+                              VK_SHADER_STAGE_TESSELLATION_CONTROL_BIT | VK_SHADER_STAGE_TESSELLATION_EVALUATION_BIT;
+        const uint32_t pinned = can ? (l.required_subgroup_stages & game) : 0;
+        NXLOG_W("nvn", "subgroups are %u wide here, the game's shaders assume 32: asking for 32 in stages 0x%x%s", l.subgroup_size, pinned,
+                (game & ~pinned) ? "; the other stages run at the driver's width (Mesa RADV: RADV_PERFTEST=cswave32,pswave32,gewave32 makes them 32 wide)" : "");
+    });
+    if (!needed || !can || !(l.required_subgroup_stages & stage)) return nullptr;
+    // VUID-VkPipelineShaderStageCreateInfo-pNext-02756: the workgroup must fit in maxComputeWorkgroupSubgroups subgroups of 32. A bigger
+    // one asked to run 32 wide is invalid usage, and AMD's Windows driver can end the process on it instead of failing the call
+    if (stage == VK_SHADER_STAGE_COMPUTE_BIT && compute_invocations > uint64_t{l.max_compute_workgroup_subgroups} * 32) {
+        static std::atomic<uint32_t> skipped{0};
+        if (skipped.fetch_add(1, std::memory_order_relaxed) < 8)
+            NXLOG_W("nvn", "compute workgroup of %llu invocations is over %u subgroups of 32: left at the driver's width",
+                    static_cast<unsigned long long>(compute_invocations), l.max_compute_workgroup_subgroups);
+        return nullptr;
+    }
+    return &k32;
+}
 
 }  // namespace nxrt::nvn::be::gpu

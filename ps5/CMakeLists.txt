@@ -81,6 +81,7 @@ function(ps5_title target)
         -Wl,--wrap=pthread_setaffinity_np -Wl,--wrap=mkstemp -Wl,--wrap=tmpfile -Wl,--wrap=readlink -Wl,--wrap=link
         -Wl,--wrap=symlink -Wl,--wrap=umask -Wl,--wrap=lstat
         -Wl,--wrap=clock_nanosleep -Wl,--wrap=pathconf -Wl,--wrap=fork   # raw syscall stubs in the SDK libc
+        -Wl,--wrap=vfork -Wl,--wrap=setsid -Wl,--wrap=getresuid -Wl,--wrap=getresgid   # SDL's (process launcher, GTK helper)
         -Wl,--wrap=read -Wl,--wrap=pread -Wl,--wrap=write -Wl,--wrap=pwrite -Wl,--wrap=fread -Wl,--wrap=fwrite   # touch()
         -Wl,--exclude-libs=ALL -Wl,--eh-frame-hdr -Wl,--build-id=none
         -Wl,--no-dependent-libraries # the runtime's #pragma comment(lib, "avrt.lib") and the like name Windows libraries

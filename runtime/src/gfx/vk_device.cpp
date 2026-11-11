@@ -689,6 +689,14 @@ bool Device::init(const DeviceDesc& desc, std::string* error) {
         limits_.max_buffer_size = p13.maxBufferSize;
         limits_.subgroup_size = p11.subgroupSize;
         limits_.subgroup_ops = p11.subgroupSupportedOperations;
+        limits_.min_subgroup_size = p13.minSubgroupSize;
+        limits_.max_subgroup_size = p13.maxSubgroupSize;
+        limits_.required_subgroup_stages = p13.requiredSubgroupSizeStages;
+        limits_.subgroup_size_control = a13.subgroupSizeControl == VK_TRUE;
+        limits_.max_compute_workgroup_subgroups = p13.maxComputeWorkgroupSubgroups;
+        NXLOG_I(kTag, "subgroups: %u wide (%u..%u), size control %d, a size can be required for stages 0x%x, at most %u per compute workgroup",
+                p11.subgroupSize, p13.minSubgroupSize, p13.maxSubgroupSize, limits_.subgroup_size_control ? 1 : 0,
+                static_cast<unsigned>(p13.requiredSubgroupSizeStages), p13.maxComputeWorkgroupSubgroups);
         limits_.max_memory_allocation_count = props_.limits.maxMemoryAllocationCount;
     }
     if (features_.conservative_raster_dynamic) {

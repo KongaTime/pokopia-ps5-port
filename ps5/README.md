@@ -22,9 +22,8 @@ On the PC (Linux, or Windows with WSL; an Arch or Ubuntu WSL distro works):
 - the [PS5 payload SDK](https://github.com/ps5-payload-dev/sdk) (`prospero-clang`)
 - [PS5_Vulkan](https://github.com/mihawk-99/PS5_Vulkan), built: `ps5-native-tool` (link and sign), `libc.prx` and its
   RADV archive (the console has no system Vulkan; the title carries Mesa's RADV driver)
-- the AGC link stubs `libSceAgc.so` / `libSceAgcDriver.so` (built by
-  [The-Darkness-Recomp](https://github.com/portingpete/The-Darkness-Recomp)'s `app/ps5` build)
-- the PS5 SDL3 (built by KongaTime's [KH 358/2 Days PS5 port](https://github.com/KongaTime/KH-358-2-PS5-Port-In-Development))
+- the AGC link stubs `libSceAgc.so` / `libSceAgcDriver.so` (any PS5 homebrew build that links RADV has them)
+- `nasm`, for the movie decoder; SDL3 and libvpx are built by `setup.sh` (`ps5/tools/build-sdl3.sh`, `build-libvpx.sh`)
 - for the shader cache: a Windows PC that can run this project's shader tools (see below)
 
 ## Set-up

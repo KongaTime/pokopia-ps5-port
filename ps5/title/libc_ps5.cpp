@@ -90,6 +90,13 @@ int __wrap_clock_nanosleep(clockid_t clock, int flags, const struct timespec* re
 }
 long __wrap_pathconf(const char* path, int name) { return ps5_pathconf(path, name); }
 pid_t __wrap_fork(void) { return ps5_fork(); }
+// SDL 3.4's own raw stubs (ps5/tools/build-sdl3.sh): vfork / setsid in its process launcher (SDL_CreateProcess) and
+// getresuid / getresgid in its GTK helper. Neither is reached by the title, but any call would end the process, so they
+// answer here: no child processes, and the title's user is the only one.
+pid_t __wrap_vfork(void) { errno = ENOSYS; return -1; }
+pid_t __wrap_setsid(void) { errno = EPERM; return -1; }
+int __wrap_getresuid(uid_t* r, uid_t* e, uid_t* s) { if (r) *r = 0; if (e) *e = 0; if (s) *s = 0; return 0; }
+int __wrap_getresgid(gid_t* r, gid_t* e, gid_t* s) { if (r) *r = 0; if (e) *e = 0; if (s) *s = 0; return 0; }
 
 // Committed section memory (the guest heap) is backed on first touch through the fault handler, which the kernel does
 // not raise for a buffer handed to it: read() into an untouched page fails with EFAULT. These back the buffer first.

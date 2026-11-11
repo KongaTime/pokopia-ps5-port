@@ -424,6 +424,10 @@ int main() {
     // them black on the console's GPU while ordinary values (20..80) came out right; the NVIDIA PC build draws them white. Its nine
     // reads of the scene (binding 129) are capped at 64, which still maps to white (runtime/docs/CONFIG.md [nvn] clamp_sampled).
     setenv("NXRT_NVN_CLAMP_SAMPLED", "b98b93ee98f5d316:129:64", 0);
+    // The game's shaders come from NVIDIA's 32-wide warps (shuffles, ballots, votes). The runtime asks for 32 per pipeline
+    // stage where Vulkan allows it (nvn_pipeline.cpp subgroup32_info); RADV lets compute ask but runs pixel and vertex
+    // shaders 64 wide unless told otherwise. Read by RADV when the Vulkan instance is made, so set before the renderer starts.
+    setenv("RADV_PERFTEST", "pswave32,gewave32,cswave32", 0);
     // Bring-up switches, as files in the title folder (uploaded by FTP, no rebuild): /app0/pkp-debug (debug-level log) and
     // /app0/pkp-breadcrumbs (one line per compat kernel call, svc and HLE call in pkp-results/calls.txt). Both slow the game.
     struct stat sw;
