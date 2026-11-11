@@ -411,6 +411,115 @@ static VkShaderModule hdr_fragment_module(const ShaderInfo* fs) {
     return m;
 }
 
+// [nvn] r11_clamp (auto: every GPU but NVIDIA; on; off). A float written to an R11G11B10F target above its largest value (65024)
+// is clamped to it by NVIDIA hardware (and the Switch), but becomes infinity on AMD (RADV on the PS5). Pokopia's sky clouds write
+// more than that into the HDR scene; the tone map turns infinity into black, so the clouds were black on the console. The fragment
+// shader of a pipeline with R11G11B10F colour targets gets a variant whose stores to those outputs go through NMin(value, 65024)
+// (NMin also turns a NaN into that bright value instead of black).
+static bool r11_clamp_on() {
+    static const bool on = [] {
+        const std::string v = config_get_str("nvn", "r11_clamp", "auto");
+        const bool r = v == "on" || (v == "auto" && device().properties().vendorID != 0x10de);
+        NXLOG_I(kTag, "R11G11B10F outputs clamped to 65024 as on NVIDIA: %s ([nvn] r11_clamp = %s)", r ? "on" : "off", v.c_str());
+        return r;
+    }();
+    return on;
+}
+
+// Rewrites `in` so every OpStore to an Output variable with a Location in `mask` (directly or through an OpAccessChain into it) stores
+// NMin(value, 65024) instead. False when nothing matched (or the module has no GLSL.std.450 import).
+static bool spirv_clamp_outputs(const std::vector<uint32_t>& in, uint32_t mask, std::vector<uint32_t>& out) {
+    if (in.size() < 5) return false;
+    uint32_t glsl = 0, first_fn = 0;
+    std::unordered_map<uint32_t, uint32_t> location;                        // variable -> Location
+    std::unordered_map<uint32_t, uint32_t> ptr_pointee;                     // Output pointer type -> pointee type
+    std::unordered_map<uint32_t, uint32_t> var_type;                        // Output variable -> its pointer type
+    std::unordered_map<uint32_t, uint32_t> float_types;                     // OpTypeFloat 32 ids (value 1)
+    std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> vec;        // vector type -> (component, count)
+    for (size_t k = 5; k < in.size();) {
+        const uint32_t op = in[k] & 0xffff, len = in[k] >> 16;
+        if (len == 0 || k + len > in.size()) return false;
+        if (op == 11 && len >= 3 && std::strncmp(reinterpret_cast<const char*>(&in[k + 2]), "GLSL.std.450", (len - 2) * 4) == 0) glsl = in[k + 1];
+        if (op == 71 && len >= 4 && in[k + 2] == 30) location[in[k + 1]] = in[k + 3];                      // OpDecorate Location
+        if (op == 22 && len >= 3 && in[k + 2] == 32) float_types[in[k + 1]] = 1;                           // OpTypeFloat 32
+        if (op == 23 && len >= 4) vec[in[k + 1]] = {in[k + 2], in[k + 3]};                                // OpTypeVector
+        if (op == 32 && len >= 4 && in[k + 2] == 3) ptr_pointee[in[k + 1]] = in[k + 3];                   // OpTypePointer Output
+        if (op == 59 && len >= 4 && in[k + 3] == 3) var_type[in[k + 2]] = in[k + 1];                      // OpVariable Output
+        if (op == 54 && !first_fn) first_fn = static_cast<uint32_t>(k);
+        k += len;
+    }
+    if (!glsl || !first_fn) return false;
+    std::unordered_map<uint32_t, uint32_t> target_ptr;   // pointer id (variable or access chain) into a masked output -> pointee type
+    for (const auto& [v, l] : location)
+        if (l < 32 && (mask >> l & 1) && var_type.count(v) && ptr_pointee.count(var_type[v])) target_ptr[v] = ptr_pointee[var_type[v]];
+    if (target_ptr.empty()) return false;
+    uint32_t bound = in[3];
+    const uint32_t kMax = 0x477e0000u;   // 65024.0f
+    std::unordered_map<uint32_t, uint32_t> consts;   // float or float-vector type -> its constant id
+    std::vector<uint32_t> decl, body;
+    auto const_of = [&](uint32_t type) -> uint32_t {
+        auto it = consts.find(type);
+        if (it != consts.end()) return it->second;
+        if (float_types.count(type)) {
+            const uint32_t id = bound++;
+            decl.insert(decl.end(), {4u << 16 | 43u, type, id, kMax});   // OpConstant
+            return consts[type] = id;
+        }
+        auto v = vec.find(type);
+        if (v == vec.end() || !float_types.count(v->second.first)) return 0;
+        uint32_t c = consts.count(v->second.first) ? consts[v->second.first] : 0;
+        if (!c) {
+            c = bound++;
+            decl.insert(decl.end(), {4u << 16 | 43u, v->second.first, c, kMax});   // OpConstant
+            consts[v->second.first] = c;
+        }
+        const uint32_t id = bound++;
+        decl.push_back((3u + v->second.second) << 16 | 44u);   // OpConstantComposite
+        decl.push_back(type);
+        decl.push_back(id);
+        for (uint32_t i = 0; i < v->second.second; ++i) decl.push_back(c);
+        return consts[type] = id;
+    };
+    bool any = false;
+    for (size_t k = first_fn; k < in.size();) {
+        const uint32_t op = in[k] & 0xffff, len = in[k] >> 16;
+        if (op == 65 && len >= 4 && target_ptr.count(in[k + 3]) && ptr_pointee.count(in[k + 1]))   // OpAccessChain into a masked output
+            target_ptr[in[k + 2]] = ptr_pointee[in[k + 1]];
+        if (op == 62 && len >= 3 && target_ptr.count(in[k + 1])) {                                   // OpStore ptr value
+            const uint32_t type = target_ptr[in[k + 1]];
+            if (const uint32_t c = const_of(type)) {
+                const uint32_t clamped = bound++;
+                body.insert(body.end(), {7u << 16 | 12u, type, clamped, glsl, 79u, in[k + 2], c});   // NMin(value, 65024)
+                body.insert(body.end(), in.begin() + k, in.begin() + k + len);
+                body[body.size() - len + 2] = clamped;
+                any = true;
+                k += len;
+                continue;
+            }
+        }
+        body.insert(body.end(), in.begin() + k, in.begin() + k + len);
+        k += len;
+    }
+    if (!any) return false;
+    out.assign(in.begin(), in.begin() + first_fn);
+    out.insert(out.end(), decl.begin(), decl.end());
+    out.insert(out.end(), body.begin(), body.end());
+    out[3] = bound;
+    return true;
+}
+
+static VkShaderModule r11_clamp_module(const ShaderInfo* fs, uint32_t mask) {
+    std::lock_guard<std::recursive_mutex> lk(g_module_mu);
+    static std::map<std::pair<const ShaderInfo*, uint32_t>, VkShaderModule> cache;
+    const auto key = std::make_pair(fs, mask);
+    auto it = cache.find(key);
+    if (it != cache.end()) return it->second;
+    std::vector<uint32_t> patched;
+    VkShaderModule m = spirv_clamp_outputs(fs->spirv, mask, patched) ? create_module(patched, fs->hash.c_str()) : shader_module(fs);
+    cache[key] = m;
+    return m;
+}
+
 static VkShaderModule dual_source_module(const ShaderInfo* fs) {
     std::lock_guard<std::recursive_mutex> lk(g_module_mu);
     auto it = g_dual_src.find(fs);
@@ -610,6 +719,10 @@ bool resolve_stage_modules(const GraphicsKey& key, StageModules* out) {
     // (geometry, else tessellation evaluation, else vertex)
     const int feeder = key.stage[2] ? 2 : key.tess[1] ? 4 : 0;
     const std::vector<SpvIntSlot> int_slots = key_int_slots(key);
+    uint32_t r11_mask = 0;   // colour targets in R11G11B10F (r11_clamp_module)
+    if (r11_clamp_on())
+        for (uint32_t c = 0; c < key.color_count && c < 8; ++c)
+            if (static_cast<VkFormat>(key.color_format[c]) == VK_FORMAT_B10G11R11_UFLOAT_PACK32) r11_mask |= 1u << c;
     for (int i = 0; i < 3; ++i) {
         if (!key.stage[i]) continue;
         if (key.xfb && i != 0) continue;     // stream-out draws run the vertex stage only
@@ -623,6 +736,7 @@ bool resolve_stage_modules(const GraphicsKey& key, StageModules* out) {
                            : (i == 0 && !int_slots.empty()) ? producer_module(key.stage[i], nullptr, int_slots)
                            : (i == 1 && key.no_out)      ? no_output_module(key.stage[i])
                            : (i == 1 && key.dual_src)    ? dual_source_module(key.stage[i])
+                           : (i == 1 && r11_mask)        ? r11_clamp_module(key.stage[i], r11_mask)
                            : (i == 1)                    ? hdr_fragment_module(key.stage[i])
                                                          : shader_module(key.stage[i]);
         if (!m) return false;

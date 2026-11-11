@@ -2287,7 +2287,10 @@ bool begin_draw(int mode, bool indexed, int index_type, VkPrimitiveTopology* top
         if (g_trace) {   // [nvn] trace_dump_tex: also the block-compressed level 0 as the GPU holds it, to compare with the prepared data
             static const std::string dump_dir = nxrt::config_get_str("nvn", "trace_dump_tex", "");
             static std::unordered_map<uint32_t, bool> raw_done;
-            if (!dump_dir.empty()) {
+            // [nvn] trace_dump_raw = false: only the prepared texture data (files), no GPU copy of every sampled texture (each one
+            // ends the pass mid-frame; on the PS5 that froze the game)
+            static const bool dump_raw = nxrt::config_get_bool("nvn", "trace_dump_raw", true);
+            if (!dump_dir.empty() && dump_raw) {
                 for (const BindingDesc& d : pl->bindings) {
                     if (d.type != VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER) continue;
                     const TexResolved r = resolve_texture(d);
@@ -2351,6 +2354,15 @@ bool begin_draw(int mode, bool indexed, int index_type, VkPrimitiveTopology* top
             }
             TRACE("    %s ubo%u %llx/%llu%s:%s", stg == kVertex ? "vs" : "fs", slot, static_cast<unsigned long long>(ub.addr), static_cast<unsigned long long>(ub.size), ur.ok ? "" : " (outside every pool)", words.c_str());
         }
+        // the program's own constant data (c[1], NvnSource::ConstantData): a table the shader indexes (e.g. a tone curve), for
+        // reproducing a draw off the console
+        for (int stg = kVertex; stg <= kFragment; ++stg)
+            if (const ShaderInfo* si = S.stage[stg]; si && !si->constants.empty()) {
+                std::string words;
+                const size_t n = std::min<size_t>(si->constants.size() / 4, ubo_bytes / 4);
+                for (size_t i = 0; i < n; ++i) { uint32_t v; std::memcpy(&v, si->constants.data() + i * 4, 4); char t[16]; std::snprintf(t, sizeof t, " %08x", v); words += t; }
+                TRACE("    %s c1 constants %zu bytes:%s", stg == kVertex ? "vs" : "fs", si->constants.size(), words.c_str());
+            }
         TRACE("    viewport %u: %g %g %g %g depth %g..%g scissor %u: %d %d %d %d", S.nvp, S.vp[0][0], S.vp[0][1], S.vp[0][2], S.vp[0][3], S.dr[0][0], S.dr[0][1], S.nsc,
               S.sc[0][0], S.sc[0][1], S.sc[0][2], S.sc[0][3]);
         for (uint32_t i = 0; i < P.ncolor; ++i)
