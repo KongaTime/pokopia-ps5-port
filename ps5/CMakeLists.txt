@@ -165,8 +165,13 @@ if(PKP_LIFT AND PKP_DEPS)
     target_include_directories(nxrt_game_pkp PRIVATE "${CMAKE_BINARY_DIR}/pkp_gen")
 
     # The title (P2: ps5/game/pkp_ps5_main.cpp)
-    add_executable(pokopia_ps5 "${CMAKE_CURRENT_SOURCE_DIR}/game/pkp_ps5_main.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/game/pad_ps5.cpp")
+    add_executable(pokopia_ps5 "${CMAKE_CURRENT_SOURCE_DIR}/game/pkp_ps5_main.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/game/pad_ps5.cpp"
+                               "${CMAKE_CURRENT_SOURCE_DIR}/game/title_screen.cpp")
     target_compile_options(pokopia_ps5 PRIVATE -O2 -g1 -fno-omit-frame-pointer)
+    # the start screen's fonts, built in with .incbin (game/title_screen.cpp)
+    target_compile_definitions(pokopia_ps5 PRIVATE PKP_FONT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts")
+    set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/game/title_screen.cpp" PROPERTIES OBJECT_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/Montserrat-Medium.ttf;${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/Inter-SemiBold.ttf;${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/KaTeX_Main-Italic.ttf")
     target_link_libraries(pokopia_ps5 PRIVATE pkp_main pkp_sdk pkp_subsdk0 pkp_rtld nxrt_game_pkp nxrt_gfx nxrt
                           ScePad SceAudioOut SceUserService SceSystemService SceNet SceImeDialog
                           "${PKP_BUILD_DIR}/stubs/libSceCommonDialog.so")   # ps5/stubs, built by game/build.sh

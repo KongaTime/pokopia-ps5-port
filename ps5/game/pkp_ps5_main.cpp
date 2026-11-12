@@ -46,6 +46,7 @@
 #include "nxrt/runtime.h"
 
 #include "pkp/pkp_game.h"
+#include "title_screen.h"
 
 namespace ps5compat { void crumb_dump(); void fault_uninstall(); }   // compat/win32_core.cpp, win32_fault.cpp
 
@@ -488,6 +489,17 @@ int main() {
         if (!headless) rd.present_mode = disp.present_mode;
         g_gfx_renderer = nxrt::gfx::Renderer::create(*g_gfx_device, rd, &err);
         if (!g_gfx_renderer) die("renderer: %s", err.c_str());
+        // The start screen (game/title_screen.cpp): Prepare game the first time, then Play. PKP_TITLE=0 (pkp-env.txt) goes straight in.
+        if (!headless && !(getenv("PKP_TITLE") && std::strcmp(getenv("PKP_TITLE"), "0") == 0)) {
+            stage("STAGE start screen");
+            if (!pkp_ps5::title_screen_run(*g_gfx_device, *g_gfx_renderer, kGame)) {
+                stage("EXIT from the start screen");
+                g_gfx_renderer.reset();
+                g_gfx_device.reset();
+                nxrt::shutdown();
+                return 0;
+            }
+        }
         nxrt::nvn::BackendDesc bd;
         bd.device = g_gfx_device.get();
         bd.renderer = g_gfx_renderer.get();
