@@ -42,7 +42,9 @@ On the PC (Linux, or Windows with WSL; an Arch or Ubuntu WSL distro works):
    builds and signs the title, and uploads the game data, the shaders and the title to `/data/homebrew/PPSA90006`.
    Each step that is already done is skipped, so after a failure run it again; a shader upload that stopped goes on
    where it was. The first upload of the shaders (47 GB with the game data, over FTP) takes hours: leave it running.
-4. Start `PPSA90006` from the home screen.
+4. Start `PPSA90006` from the home screen. The first time, pick **Prepare game**: it checks the game files and the
+   shaders (about 15 seconds) and says what is missing, if anything. Then **Play** starts the game, and later starts go
+   straight to Play.
 
 Later builds: `ps5/game/build.sh --deploy` rebuilds and uploads only the title. Close the game first: the console
 does not let a running title's `eboot.bin` be replaced, and the upload fails silently.
@@ -69,6 +71,8 @@ All in `/data/homebrew/PPSA90006` on the console (the title's `/app0`):
 | `pkp-env.txt` | optional, `NAME=VALUE` lines: any runtime setting as its `NXRT_*` variable ([runtime/docs/CONFIG.md](../runtime/docs/CONFIG.md)); these replace the console defaults |
 | `pkp.ini` | optional: the runtime's ini, for the keys `pkp-env.txt` does not set |
 | `controls.ini` | button mapping and display options (`[play] controls`) |
+| `title.png`, `logo.png` | optional, your own pictures for the start screen: the background (filled to the screen) and the name (top left). With a `title.png` and no `logo.png` the picture's own name is used |
+| `pkp-prepared.txt` | written when Prepare game has passed; delete it to prepare again |
 | `save/` | your save data |
 | `pipeline_cache.bin`, `pipeline_keys.bin` | compiled graphics pipelines, kept between sessions so the second start stutters less; delete both to start over |
 | `pkp-results/pkp.log` | the log of the last session (`pkp.log.prev`: the one before) |
