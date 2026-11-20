@@ -46,7 +46,7 @@ export async function render(el, ctx) {
     const ok = report && report.chosen;
     const started = st.steps.some((s) => s.state !== 'pending');
     const allDone = st.steps.length && st.steps.every((s) => s.state === 'done');
-    const label = allDone ? 'Install again' : started ? 'Continue' : 'Install on PS5';
+    const label = allDone ? 'Check again' : started ? 'Continue' : 'Install on PS5';
     el.innerHTML = `
       <div class="page">
         <div class="hero">
@@ -84,7 +84,7 @@ export async function render(el, ctx) {
         <div class="card">
           <h2>${icon('wrench')}3. Install</h2>
           <div class="stack">
-            <p class="dim">The first time takes hours: the build about an hour, the shader cache one to two hours, and the upload (about 50 GB) depends on your network. You can pause and continue later; finished work is kept, and files already on the console are not sent again. Close the game on the PS5 before installing an update.</p>
+            <p class="dim">The first time takes hours: the build 10 to 30 minutes, the shader cache one to two hours, and the upload (about 50 GB) depends on your network. You can pause and continue later; finished work is kept, and files already on the console are not sent again. Close the game on the PS5 before installing an update.</p>
             ${st.steps.map(stepHtml).join('')}
             ${st.outcome === 'error' ? `<div class="banner danger">${icon('circle-x')}<div style="white-space: pre-wrap">${esc(st.message)}</div></div>` : ''}
             ${st.outcome === 'done' && !running ? `<div class="banner ok">${icon('circle-check')}<div>Everything is on your PS5. Start <b>PPSA90006</b> from the home screen (the first time, install it with your homebrew installer, as for any fake-signed title). On its start screen pick <b>Prepare game</b> once: it checks the files and shaders. Then <b>Play</b>.</div></div>` : ''}

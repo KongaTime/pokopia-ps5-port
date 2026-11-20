@@ -209,13 +209,15 @@ def main():
         link(runner, recipe, obj, elf)
         sign(runner, recipe, elf, obj, title)
         times['link'] = round(time.time() - t, 1)
+        # the console's file system reports a signed file's size as that of the ELF inside it: the launcher compares with this
+        elf_size = os.path.getsize(os.path.join(obj, 'eboot.elf'))
         if not a.keep:
             progress('finish', 0, 1, 'Removing the build files')
             for d in ('lift', 'obj'):
                 shutil.rmtree(os.path.join(build, d), ignore_errors=True)
         eboot = sha256(os.path.join(title, 'eboot.bin'))
         ref = recipe.get('reference_eboot_sha256', '')
-        done = dict(stamp, eboot_sha256=eboot, matches_reference=(eboot == ref) if ref else None, seconds=times,
+        done = dict(stamp, eboot_sha256=eboot, eboot_elf_size=elf_size, matches_reference=(eboot == ref) if ref else None, seconds=times,
                     finished=time.strftime('%Y-%m-%d %H:%M:%S'))
         json.dump(done, open(os.path.join(build, 'done.json'), 'w'), indent=1)
         progress('finish', 1, 1, 'The PS5 title is ready (%d s)%s' % (time.time() - t0, ', identical to the reference build' if done['matches_reference'] else ''))

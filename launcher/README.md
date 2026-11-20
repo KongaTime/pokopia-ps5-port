@@ -39,8 +39,8 @@ press **Install on PS5**. Four steps, each with its own bar; Pause stops the run
 
 1. **Build the PS5 title**: `tools\build\ps5_build.py` checks the dump (the same check as the PC build), lifts it with the PC
    build's own lifter, compiles the lifted code for the console with the bundled clang, links it against the prebuilt runtime,
-   RADV, SDL3 and libvpx, then converts and signs it with `ps5-native-tool` into `<game>\ps5\PPSA90006`. About an hour on a
-   recent PC. The same dump gives the same `eboot.bin` as `ps5/game/build.sh` on Linux: the bundle carries that build's exact
+   RADV, SDL3 and libvpx, then converts and signs it with `ps5-native-tool` into `<game>\ps5\PPSA90006`. About 7 minutes on a
+   16-thread PC. The same dump gives the same `eboot.bin` as `ps5/game/build.sh` on Linux: the bundle carries that build's exact
    `clang -cc1` and `ld.lld` lines and the same LLVM version, and `<game>\ps5\build\done.json` says whether the result matches
    the release's reference build (`matches_reference`).
 2. **Make the shader cache**: the PC's own shader setup (`shaders.rs`) into `<game>\shader_cache\spirv`. A cache the PC setup

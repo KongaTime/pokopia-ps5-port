@@ -279,13 +279,15 @@ pub fn run(job: &Job, cancel: &AtomicBool, mut emit: impl FnMut(&Status)) -> Res
             }
             Some(n) => changed |= n > 0,
         }
-        // the console does not let a running title's eboot.bin be replaced, and says nothing: check it
+        // the console does not let a running title's eboot.bin be replaced, and says nothing: check it. Its file system reports a
+        // signed file's size as that of the ELF inside (ps5_build.py records it as eboot_elf_size).
         let mut f = Ftp::open(&host, FTP_PORT)?;
-        let want = fs::metadata(title.join("eboot.bin")).map(|x| x.len()).unwrap_or(0);
+        let file = fs::metadata(title.join("eboot.bin")).map(|x| x.len()).unwrap_or(0);
+        let elf = done_json(&job.game_dir).and_then(|d| d.get("eboot_elf_size").and_then(|v| v.as_u64()));
         let got = f.size(&format!("{}/eboot.bin", REMOTE))?;
-        if got != Some(want) {
+        if got != Some(file) && (elf.is_none() || got != elf) {
             f.quit();
-            return Err(format!("The PS5 did not take the new eboot.bin ({} bytes there, {} sent). Close {} on the console (it cannot be replaced while it runs), then Continue.", got.unwrap_or(0), want, TITLE_ID));
+            return Err(format!("The PS5 did not take the new eboot.bin ({} bytes there, {} expected). Close {} on the console (it cannot be replaced while it runs), then Continue.", got.unwrap_or(0), elf.unwrap_or(file), TITLE_ID));
         }
         if changed {
             let _ = f.dele(&format!("{}/pkp-prepared.txt", REMOTE));
@@ -398,7 +400,8 @@ fn sync(host: &str, pairs: &[(PathBuf, String)], last: &[(PathBuf, String)], can
     let error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let stop = Arc::new(AtomicBool::new(false));
     let mut handles = Vec::new();
-    let n_workers = WORKERS.min(queue.lock().unwrap().len()).max(if queue.lock().unwrap().is_empty() { 0 } else { 1 });
+    let queued = queue.lock().unwrap().len();
+    let n_workers = WORKERS.min(queued);
     for _ in 0..n_workers {
         let (queue, sent, files_done, error, stop, host) = (queue.clone(), sent.clone(), files_done.clone(), error.clone(), stop.clone(), host.to_string());
         handles.push(std::thread::spawn(move || {
