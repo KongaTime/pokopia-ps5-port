@@ -12,7 +12,9 @@ stay as they are, so this works only while the runtime and its API, ctx.h's NXRE
   tools/build/recomp/          LICENSE, games/, include/, nxrecomp/ from recomp/ (the lifter)
   tools/ps5/                   the PS5 toolchain (ps5/tools/bundle-windows.sh)
   licenses/BUNDLED_TOOLS.txt   from game-build/release_b
-  README.txt                   the base's, with the version and a PS5 section
+  README.txt                   written here (README_TEXT), headed --title and the version
+  ps5/art/                     --art: the home screen icon0.png / pic0.dds / pic1.dds the PS5 build puts in the title, with
+                               licenses/NOTICE.artwork.txt (the pictures are the rights holders'; never in the repository)
 Writes <out>/<package>-<version>/ and <out>/<package>-<version>-win64.zip. The package holds no game code or data.
 """
 import argparse
@@ -26,12 +28,33 @@ import zipfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 
-PS5_README = '''
-PS5 (optional): the launcher's PS5 page puts the game on your own PS5 as the homebrew title PPSA90006. You need a PS5 that runs
-homebrew and its FTP server (port 2121). Pick the same dump folder, type the console's IP address and press Install on PS5: the
-launcher builds and signs the title from your dump on this PC, makes the shader cache and uploads everything (about 50 GB, so the
-first install takes hours; you can pause and continue). Then start PPSA90006 on the console (install it once with your homebrew
-installer), pick Prepare game, then Play.
+README_TEXT = '''@TITLE@ @VERSION@
+
+Pokemon Pokopia (version 2.0.1a), recompiled to run natively as a homebrew title on your PS5 (PPSA90006), and on this PC.
+You need your own copy of the game: a decrypted dump folder (base/ and updates/<version>/, each with exefs/ and romfs/), or
+your NSP / XCI files with your own keys. Nothing from the game is in this download: it is built from your dump, on your PC.
+
+PS5
+1. Your PS5 must run homebrew, with its FTP server started (port 2121).
+2. Run PokopiaLauncher.exe and open the PS5 page.
+3. Pick your dump folder, type your PS5's IP address (Settings, Network, Connection status) and press Install on PS5.
+   The launcher builds and signs the title on this PC (10 to 30 minutes), makes the shader cache (1 to 2 hours) and uploads
+   everything to the console (about 50 GB). You can pause and continue later; nothing finished is done twice.
+4. Install PPSA90006 with your homebrew installer, start it, pick Prepare game once (it checks the files), then Play.
+
+PC
+1. Run PokopiaLauncher.exe, pick your dump folder on the Game files page and press Set up (it builds pkp.exe and the
+   shader cache on this PC; you can pause and continue later).
+2. Press Play.
+
+Licences: LICENSE.txt and licenses/. Not affiliated with or endorsed by Nintendo, The Pokemon Company or Koei Tecmo.
+'''
+
+ART = ('icon0.png', 'pic0.dds', 'pic1.dds')
+ART_NOTICE = '''The home screen pictures in ps5/art (icon0.png, pic0.dds, pic1.dds) are made from official artwork of Pokemon Pokopia.
+That artwork belongs to its rights holders (Nintendo, Creatures Inc., GAME FREAK inc., The Pokemon Company); it is not
+covered by this project's licence. Delete ps5/art before installing to use the plain icon instead. Rights holders: see
+LEGAL.md of the project ("Rights holder contact").
 '''
 
 
@@ -51,6 +74,9 @@ def main():
     ap.add_argument('--launcher', required=True, help='the launcher exe built from this repository (npm run tauri build)')
     ap.add_argument('--ps5', required=True, help='the tools/ps5 folder (ps5/tools/bundle-windows.sh)')
     ap.add_argument('--out', required=True)
+    ap.add_argument('--package', help="the package name (default: the base package's)")
+    ap.add_argument('--title', default='Pokopia PS5 Port', help='the heading of README.txt')
+    ap.add_argument('--art', help='a folder with the home screen pictures to ship (icon0.png, pic0.dds, pic1.dds)')
     a = ap.parse_args()
 
     z = zipfile.ZipFile(a.base)
@@ -59,6 +85,7 @@ def main():
     if not m:
         fail('the base zip\'s folder %s is not <package>-<version>' % top)
     package, base_version = m.groups()
+    package = a.package or package
     name = '%s-%s' % (package, a.version)
     dst = os.path.join(os.path.abspath(a.out), name)
     if os.path.exists(dst):
@@ -96,12 +123,22 @@ def main():
     print('==> tools/ps5')
     shutil.copytree(a.ps5, os.path.join(dst, 'tools', 'ps5'), ignore=ignore)
 
-    readme = open(os.path.join(dst, 'README.txt'), encoding='utf-8').read()
-    readme = readme.replace(base_version, a.version, 1)
-    if 'PPSA90006' not in readme:
-        readme = readme.replace('\nLicences:', PS5_README + '\nLicences:', 1)
     with open(os.path.join(dst, 'README.txt'), 'w', encoding='utf-8', newline='\r\n') as f:
-        f.write(readme.replace('\r\n', '\n'))
+        f.write(README_TEXT.replace('@TITLE@', a.title).replace('@VERSION@', a.version))
+
+    if a.art:
+        print('==> ps5/art')
+        art = os.path.join(dst, 'ps5', 'art')
+        os.makedirs(art)
+        n = 0
+        for f in ART:
+            if os.path.isfile(os.path.join(a.art, f)):
+                shutil.copy2(os.path.join(a.art, f), os.path.join(art, f))
+                n += 1
+        if not n:
+            fail('%s has none of %s' % (a.art, ', '.join(ART)))
+        with open(os.path.join(dst, 'licenses', 'NOTICE.artwork.txt'), 'w', encoding='utf-8', newline='\r\n') as f:
+            f.write(ART_NOTICE)
 
     print('==> zip')
     out_zip = os.path.join(os.path.abspath(a.out), name + '-win64.zip')

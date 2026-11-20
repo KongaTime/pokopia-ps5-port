@@ -1,6 +1,6 @@
 [package]
 name = "recomp-launcher"
-version = "0.1.1"
+version = "1.0.0"
 description = "Launcher for a static recompilation PC port (game-independent: the game manifest game.toml next to it says which)"
 edition = "2021"
 license = "GPL-3.0-or-later"

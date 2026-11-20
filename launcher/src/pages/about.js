@@ -13,7 +13,7 @@ export async function render(el, ctx) {
     <div class="page">
       <div class="hero">
         <h1>About</h1>
-        <p class="dim">Launcher for the ${esc(g.short_title)} PC port (a static recompilation, ${esc(g.exe)}).</p>
+        <p class="dim">Launcher for the ${esc(g.short_title)} ports, a static recompilation: on this PC (${esc(g.exe)}) and on your PS5 (the homebrew title PPSA90006, PS5 page).</p>
       </div>
       <div class="card">
         <h2>${icon('info')}${esc(g.launcher_name)}</h2>
