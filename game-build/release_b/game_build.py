@@ -32,7 +32,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 RECOMP = os.path.join(HERE, 'recomp')
 SDK = os.path.join(HERE, 'sdk')
 ZIG = os.path.join(HERE, 'zig', 'zig.exe')
-FORMAT = 2          # bump when the build layout or the runtime API (sdk/rt_api.h) changes: older partial builds are then started over
+FORMAT = 3          # 3: the lifter keeps registers and flags in C locals (reg_locals 'lean'). Bump when the build layout or the runtime API (sdk/rt_api.h) changes: older partial builds are then started over
                     # (the launcher also treats an exe whose done.json has another format as not built: gamebuild.rs BUILD_FORMAT)
 
 MANIFEST = {}       # the game manifest (load_manifest)

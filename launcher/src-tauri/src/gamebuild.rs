@@ -36,7 +36,7 @@ pub struct Tick {
 /// The build script in the package; `FORMAT` in it and `BUILD_FORMAT` here move together.
 const SCRIPT: &str = "game_build.py";
 /// done.json of a finished build carries this "format". An exe built by another format (an older runtime API) is rebuilt.
-const BUILD_FORMAT: u64 = 2;
+const BUILD_FORMAT: u64 = 3;
 
 /// The package builds the game exe itself (model b) when it carries the build tools.
 pub fn is_package_b(tools_dir: &Path) -> bool {

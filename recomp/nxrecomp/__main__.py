@@ -15,7 +15,8 @@ def spec_from(a):
     if not kind:
         magic = open(a.input, 'rb').read(4)
         kind = 'nso' if magic == b'NSO0' else 'static_elf'
-    return {'kind': kind, 'path': a.input, 'base': int(a.base, 16), 'name': a.name, 'game': a.game, 'patches': a.patches, 'sites': a.sites, 'index': a.index}
+    return {'kind': kind, 'path': a.input, 'base': int(a.base, 16), 'name': a.name, 'game': a.game, 'patches': a.patches, 'sites': a.sites, 'index': a.index,
+            'locals': getattr(a, 'locals', None)}
 
 
 def main(argv=None):
@@ -28,6 +29,8 @@ def main(argv=None):
             p.add_argument('outdir')
             p.add_argument('--jobs', type=int, default=8)
             p.add_argument('--shards', type=int, default=0)
+            p.add_argument('--locals', choices=['off', 'exact', 'aapcs', 'lean'],
+                           help='guest registers and flags in C locals (locals.py; config.py reg_locals); default: the game config')
         p.add_argument('--game', default='generic')
         p.add_argument('--kind', choices=['nso', 'nx_elf', 'static_elf'])
         p.add_argument('--base', default='0x7100000000')

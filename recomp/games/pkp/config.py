@@ -33,3 +33,5 @@ class Config(GameConfig):
     # rtld's process entry (0x0) has no FDE, symbol or direct branch, so discovery never roots it (runtime/docs/S6.md)
     extra_entries = {'rtld': [0x0]}
     patches = None
+    # guest registers and NZCV in C locals with the whole-module flag table (nxrecomp/locals.py; config.py reg_locals)
+    reg_locals = 'lean'

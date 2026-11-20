@@ -26,20 +26,28 @@ Python is `tools\.venv\Scripts\python.exe` at the repository root (3.13; package
 23 clang-cl, CMake, Ninja, sccache; `scripts\nx_env.cmd <command>` runs a command with the MSVC environment set up.
 
     python -m nxrecomp lift  <module.nso|prog.elf> <outdir> [--game mpr] [--base 0x7100000000] [--name main] [--index N]
-                             [--shards 16] [--jobs 8] [--patches FILE] [--sites FILE]
+                             [--shards 16] [--jobs 8] [--patches FILE] [--sites FILE] [--locals off|exact|aapcs|lean]
     python -m nxrecomp cover <module.nso|prog.elf> [--game mpr]      per-instruction-word translation coverage of .text
     python -m nxrecomp.funcs <module> --out functions.tsv             function boundaries and the evidence for each
 
 In a CMake build (the game, or an oracle), `cmake/NxRecomp.cmake` gives `nxrecomp_add_module(<target> INPUT <file> ...)`, which
 lifts as a build step and builds the result as a static library (flags: C++20, `-fno-strict-aliasing`, `-ffp-contract=off`,
-`-mcx16`, optnone for functions over `optnone_insns` instructions; `NX_USE_LAUNCHER` adds a time-limit fallback). Presets:
-`cmake --preset default`.
+`-mcx16`, optnone for functions over `optnone_insns` instructions; `NX_USE_LAUNCHER` adds a time-limit fallback; `NX_LOCALS`,
+or the environment variable of that name, passes `--locals`). Presets: `cmake --preset default`. Without an installed LLVM, set
+`NX_LLVM_BIN` to an extracted LLVM release's `bin` folder (`scripts
+x_env.cmd`, `cmake/clang-cl.cmake`).
 
 ## How it is built
 
 - `nxrecomp/image.py` loads a module (NSO, smo-style ELF, or static ELF) into one `Image`; `funcs.py` finds function
   boundaries (`.eh_frame` and sized symbols first); `eh.py` reads CFI and C++ LSDAs; `jumptables.py` resolves `br` tables;
   `program.py` lifts and writes the sources.
+- `locals.py` (from Recompia) rewrites each lifted function so that the guest registers and NZCV live in C locals, kept
+  in host registers, and are written back to the Ctx only where other code can see them (calls, returns, tail exits,
+  escapes to the runtime). Modes in `config.py` `reg_locals`: `off`, `exact`, `aapcs`, `lean` (Pokopia: `lean`, which first
+  summarises every function of the module so that flags are synced at a call or a return only where some code reads them).
+  The end-to-end oracle passes in `off`, `exact` and `lean`; `aapcs` does not keep the flags at returns and fails it, and
+  the game reads flags across calls in 58 places of `main`, so it is not used.
 - Instruction lifting has two tiers. Tier 1 (`lift/a64.py`) decodes bit fields and is the reference where it applies. Tier 2
   (`lift/tier2/`) is Capstone-driven and covers what tier 1 does not: LSE atomics, crypto, the long tail of AdvSIMD, structure
   loads and stores. The files `x_*.py` there override or add handlers; the ported emitters beside them are kept as the base.

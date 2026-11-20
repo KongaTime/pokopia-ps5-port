@@ -44,6 +44,21 @@ def sha256(path):
     return gb.sha256(path)
 
 
+def lifter_hash():
+    """One hash over the bundled lifter (its Python sources, headers and game files): another lifter starts the build over."""
+    import hashlib
+    h = hashlib.sha256()
+    for root in (os.path.join(gb.RECOMP, 'nxrecomp'), os.path.join(gb.RECOMP, 'include'), os.path.join(gb.RECOMP, 'games')):
+        for dp, dns, fns in os.walk(root):
+            dns[:] = sorted(d for d in dns if d != '__pycache__')
+            for f in sorted(fns):
+                if f.endswith(('.py', '.h', '.sites', '.toml', '.sig')):
+                    p = os.path.join(dp, f)
+                    h.update(os.path.relpath(p, gb.RECOMP).replace('\\', '/').encode())
+                    h.update(open(p, 'rb').read())
+    return h.hexdigest()
+
+
 def load_recipe():
     p = os.path.join(PS5, 'recipe.json')
     if not os.path.isfile(p):
@@ -186,7 +201,7 @@ def main():
         title = os.path.join(root, recipe['title_id'])
         want = gb.verify(a.exefs)
         stamp = {'format': FORMAT, 'main_build_id': want['main_build_id'], 'sha256': want['sha256'],
-                 'recipe': sha256(os.path.join(PS5, 'recipe.json'))}
+                 'recipe': sha256(os.path.join(PS5, 'recipe.json')), 'lifter': lifter_hash()}
         state_p = os.path.join(build, 'state.json')
         old = json.load(open(state_p)) if os.path.isfile(state_p) else None
         if old != stamp:                 # another dump or another toolchain: start over
