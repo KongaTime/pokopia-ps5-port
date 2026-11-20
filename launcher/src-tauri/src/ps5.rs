@@ -138,6 +138,63 @@ pub fn check_console(host: &str) -> Result<String, String> {
     })
 }
 
+/// One console the network scan found.
+#[derive(Serialize, Clone)]
+pub struct Found {
+    pub host: String,
+    /// PPSA90006 is already in /data/homebrew there
+    pub installed: bool,
+}
+
+/// This PC's IPv4 address on its main network: the address a UDP socket "connected" to a public address would send from
+/// (connecting a UDP socket sends nothing).
+fn local_ipv4() -> Option<std::net::Ipv4Addr> {
+    let s = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    s.connect("8.8.8.8:80").ok()?;
+    match s.local_addr().ok()?.ip() {
+        std::net::IpAddr::V4(a) if !a.is_loopback() && !a.is_unspecified() => Some(a),
+        _ => None,
+    }
+}
+
+/// Finds PS5s on this PC's /24 network: every address whose port 2121 answers is asked for its root folder, and the ones that
+/// list the console's own folders (system_ex, preinst) count. About two seconds; reads only.
+pub fn discover() -> Result<Vec<Found>, String> {
+    let me = local_ipv4().ok_or("This PC has no IPv4 network address. Connect it to the same network as the PS5.")?;
+    let o = me.octets();
+    let hosts: Vec<String> = (1..255u8).filter(|&d| d != o[3]).map(|d| format!("{}.{}.{}.{}", o[0], o[1], o[2], d)).collect();
+    let open = Arc::new(Mutex::new(Vec::new()));
+    let queue = Arc::new(Mutex::new(hosts));
+    let mut workers = Vec::new();
+    for _ in 0..64 {
+        let (queue, open) = (queue.clone(), open.clone());
+        workers.push(std::thread::spawn(move || loop {
+            let Some(h) = queue.lock().unwrap().pop() else { break };
+            if let Ok(sa) = format!("{}:{}", h, FTP_PORT).parse::<std::net::SocketAddr>() {
+                if std::net::TcpStream::connect_timeout(&sa, Duration::from_millis(400)).is_ok() {
+                    open.lock().unwrap().push(h);
+                }
+            }
+        }));
+    }
+    for w in workers {
+        let _ = w.join();
+    }
+    let mut out = Vec::new();
+    let mut cands = open.lock().unwrap().clone();
+    cands.sort_by_key(|h| h.rsplit('.').next().and_then(|d| d.parse::<u8>().ok()).unwrap_or(0));
+    for h in cands {
+        let Ok(mut f) = Ftp::open(&h, FTP_PORT) else { continue };
+        let root: HashSet<String> = f.list("/").unwrap_or_default().into_iter().map(|e| e.name).collect();
+        if root.contains("system_ex") && root.contains("preinst") {
+            let installed = f.list(REMOTE).map(|l| l.iter().any(|e| e.name == "eboot.bin")).unwrap_or(false);
+            out.push(Found { host: h, installed });
+        }
+        f.quit();
+    }
+    Ok(out)
+}
+
 /// What each step looks like before (or between) runs, from the files on this PC.
 pub fn snapshot(game_dir: &Path, host: &str) -> Vec<Step> {
     let m = read_marker(game_dir);

@@ -39,6 +39,28 @@ export async function render(el, ctx) {
   let ov = await api('ps5_status');
   let host = ov.host || '';
   let check = { busy: false, text: '', ok: null };
+  let finding = false;
+  let found = []; // consoles the last search found ({host, installed}), shown as buttons when there are several
+
+  async function find(quiet) {
+    finding = true;
+    draw();
+    try {
+      found = await api('ps5_find');
+      if (found.length === 1) {
+        host = found[0].host;
+        check = { busy: false, ok: true, text: `Found your PS5 at ${host}.${found[0].installed ? ' PPSA90006 is already on it; the install updates it.' : ''}` };
+      } else if (found.length > 1) {
+        check = { busy: false, ok: true, text: `Found ${found.length} PS5s on this network: pick yours below.` };
+      } else if (!quiet) {
+        check = { busy: false, ok: false, text: 'No PS5 answered on this network. Start the FTP server on the console (port 2121) and make sure this PC is on the same network, or type the address.' };
+      }
+    } catch (e) {
+      if (!quiet) check = { busy: false, ok: false, text: errText(e) };
+    }
+    finding = false;
+    draw();
+  }
 
   function draw() {
     const st = ov.status;
@@ -74,9 +96,11 @@ export async function render(el, ctx) {
           <div class="stack">
             <div class="row">
               <input type="text" id="host" spellcheck="false" placeholder="192.168.1.20" value="${esc(host)}" ${running ? 'disabled' : ''} style="max-width: 16rem" />
-              <button class="btn" id="check" ${running || check.busy ? 'disabled' : ''}>${icon(check.busy ? 'loader-circle' : 'hard-drive', check.busy ? 'spin' : '')}Check connection</button>
+              <button class="btn" id="find" ${running || check.busy || finding ? 'disabled' : ''}>${icon(finding ? 'loader-circle' : 'folder-search', finding ? 'spin' : '')}Find my PS5</button>
+              <button class="btn" id="check" ${running || check.busy || finding ? 'disabled' : ''}>${icon(check.busy ? 'loader-circle' : 'hard-drive', check.busy ? 'spin' : '')}Check connection</button>
             </div>
-            <p class="faint">The console's IP address (on the PS5: Settings, Network, Connection status). Start its FTP server first.</p>
+            <p class="faint">Start the FTP server on your PS5 (port 2121), then press Find my PS5. Or type the console's IP address (on the PS5: Settings, Network, Connection status).</p>
+            ${found.length > 1 ? `<div class="row">${found.map((f) => `<button class="btn quiet" data-host="${esc(f.host)}">${icon('monitor')}${esc(f.host)}${f.installed ? ' (PPSA90006 installed)' : ''}</button>`).join('')}</div>` : ''}
             ${check.text ? `<div class="banner ${check.ok ? 'ok' : 'danger'}">${icon(check.ok ? 'circle-check' : 'circle-x')}<div>${esc(check.text)}</div></div>` : ''}
           </div>
         </div>
@@ -119,6 +143,15 @@ export async function render(el, ctx) {
       const run = el.querySelector('#run');
       if (run) run.disabled = !(ov.available && report && report.chosen && host.trim());
     });
+    el.querySelector('#find').addEventListener('click', () => find(false));
+    el.querySelectorAll('[data-host]').forEach((b) =>
+      b.addEventListener('click', () => {
+        host = b.dataset.host;
+        found = [];
+        check = { busy: false, ok: true, text: `Using the PS5 at ${host}.` };
+        draw();
+      }),
+    );
     el.querySelector('#check').addEventListener('click', async () => {
       check = { busy: true, text: '', ok: null };
       draw();
@@ -160,4 +193,6 @@ export async function render(el, ctx) {
     draw();
   };
   draw();
+  // no address saved yet: look for the console right away (quietly: nothing is shown when none answers)
+  if (!host.trim() && !ov.status.running) find(true);
 }

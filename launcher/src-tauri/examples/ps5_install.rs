@@ -23,6 +23,13 @@ use std::time::Instant;
 
 fn main() {
     let a: Vec<String> = std::env::args().skip(1).collect();
+    if a.first().map(|s| s.as_str()) == Some("find") {
+        match ps5::discover() {
+            Ok(v) => v.iter().for_each(|f| println!("{} {}", f.host, if f.installed { "(PPSA90006 installed)" } else { "" })),
+            Err(e) => eprintln!("error: {}", e),
+        }
+        return;
+    }
     if a.first().map(|s| s.as_str()) == Some("upload-test") && a.len() == 4 {
         upload_test(&a[1], &a[2], &a[3]);
         return;

@@ -349,6 +349,12 @@ fn ps5_status(app: AppHandle, state: State<Arc<Ps5State>>) -> Ps5Overview {
     Ps5Overview { available: ps5::available(&exe_dir().join("tools")), host: cfg.ps5_host, status }
 }
 
+/// Looks for PS5s with their FTP server running on this PC's network (ps5::discover).
+#[tauri::command]
+async fn ps5_find() -> Result<Vec<ps5::Found>, String> {
+    tauri::async_runtime::spawn_blocking(ps5::discover).await.map_err(|e| e.to_string())?
+}
+
 /// Stores the console address and checks that its FTP server answers.
 #[tauri::command]
 async fn ps5_check(app: AppHandle, host: String) -> Result<String, String> {
@@ -541,6 +547,7 @@ fn main() {
             open_game_dir,
             ps5_status,
             ps5_check,
+            ps5_find,
             ps5_start,
             ps5_cancel,
         ])
