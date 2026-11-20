@@ -128,7 +128,12 @@ impl Ftp {
     }
 
     pub fn dele(&mut self, path: &str) -> Result<bool, String> {
-        Ok(self.cmd(&format!("DELE {}", path))?.0 == 250)
+        Ok((200..300).contains(&self.cmd(&format!("DELE {}", path))?.0))
+    }
+
+    #[allow(dead_code)] // examples/ps5_install.rs upload-test
+    pub fn rmd(&mut self, path: &str) -> Result<bool, String> {
+        Ok((200..300).contains(&self.cmd(&format!("RMD {}", path))?.0))
     }
 
     /// The folder's entries; an empty list when it does not exist.

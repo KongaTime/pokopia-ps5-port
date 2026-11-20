@@ -328,7 +328,7 @@ fn gb(b: u64) -> String {
 
 /// Uploads each local folder to its remote folder, skipping files the console already has with the same size, on WORKERS
 /// connections; then `last` (always sent, in order, on one connection). Some(files sent) = done, None = cancelled.
-fn sync(host: &str, pairs: &[(PathBuf, String)], last: &[(PathBuf, String)], cancel: &AtomicBool, mut report: impl FnMut(u64, u64, String)) -> Result<Option<u64>, String> {
+pub fn sync(host: &str, pairs: &[(PathBuf, String)], last: &[(PathBuf, String)], cancel: &AtomicBool, mut report: impl FnMut(u64, u64, String)) -> Result<Option<u64>, String> {
     report(0, 0, "Checking what is already on the PS5...".into());
     let mut todo: Vec<(PathBuf, String, u64)> = Vec::new();
     let mut ctrl = Ftp::open(host, FTP_PORT)?;
