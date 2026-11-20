@@ -83,7 +83,7 @@ All in `/data/homebrew/PPSA90006` on the console (the title's `/app0`):
 | `pkp.ini` | optional: the runtime's ini, for the keys `pkp-env.txt` does not set |
 | `controls.ini` | button mapping and display options (`[play] controls`) |
 | `title.png`, `logo.png` | optional, your own pictures for the start screen: the background (filled to the screen) and the name (top left). With a `title.png` and no `logo.png` the picture's own name is used |
-| `sce_sys/icon0.png`, `sce_sys/pic0.png` | the home screen icon (512x512) and backdrop (1920x1080). Builds use the payload SDK's sample icon and no backdrop; your own pictures come from `PKP_ART` (`ps5/local.env`) or, with the launcher, `<game folder>\ps5rt`. They are never part of the repository or a release. After changing them, install the title again with your homebrew installer so the home screen reads them |
+| `sce_sys/icon0.png`, `sce_sys/pic0.png` | the home screen icon (512x512) and backdrop (1920x1080). Builds use the payload SDK's sample icon and no backdrop; your own pictures come from `PKP_ART` (`ps5/local.env`) or, with the launcher, `<game folder>\ps5\art`. They are never part of the repository or a release. After changing them, install the title again with your homebrew installer so the home screen reads them |
 | `pkp-prepared.txt` | written when Prepare game has passed; delete it to prepare again |
 | `save/` | your save data |
 | `pipeline_cache.bin`, `pipeline_keys.bin` | compiled graphics pipelines, kept between sessions so the second start stutters less; delete both to start over |
