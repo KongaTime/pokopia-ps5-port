@@ -74,6 +74,9 @@ libc.prx, font), `bin\ps5-native-tool.exe` and `recipe.json` (the compile and li
 ... for paths). Nothing in it comes from the game. Licences: `BUNDLED_TOOLS.txt` and `tools\ps5\licenses`.
 
 The release also needs `tools\build\ps5_build.py` next to `game_build.py` (from `game-build/release_b`).
+`game-build/release_b/make_release.py` makes such a release from a published package zip: it puts in the launcher, both build
+scripts, the lifter and `tools\ps5`, keeps the rest (the runtime DLL among it; the lifter's ABI must match it), and writes
+`<package>-<version>-win64.zip`.
 
 ## Release folder
 
