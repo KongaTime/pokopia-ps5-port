@@ -81,16 +81,22 @@ fn quiet(cmd: &mut Command) {
 }
 
 /// Runs the build. Ok(true) = the exe built, Ok(false) = paused, Err = what went wrong, in the script's words.
-pub fn run(job: &Job, tools: &Tools, cancel: &AtomicBool, mut report: impl FnMut(Tick)) -> Result<bool, String> {
-    let build = job.game_dir.join("build");
-    fs::create_dir_all(&build).map_err(|e| format!("cannot create {}: {}", build.display(), e))?;
+pub fn run(job: &Job, tools: &Tools, cancel: &AtomicBool, report: impl FnMut(Tick)) -> Result<bool, String> {
+    run_script(&tools.python, &tools.script, &job.exefs, &job.game_dir, job.jobs, &job.game_dir.join("build"), cancel, report)
+}
+
+/// Runs a build script of the package (game_build.py, ps5_build.py: the same arguments, output lines and exit codes) whose
+/// cancel file is `<build>/cancel`. Ok(true) = done, Ok(false) = paused.
+#[allow(clippy::too_many_arguments)]
+pub fn run_script(python: &Path, script: &Path, exefs: &Path, game_dir: &Path, jobs: usize, build: &Path, cancel: &AtomicBool, mut report: impl FnMut(Tick)) -> Result<bool, String> {
+    fs::create_dir_all(build).map_err(|e| format!("cannot create {}: {}", build.display(), e))?;
     let cancel_file = build.join("cancel");
     let _ = fs::remove_file(&cancel_file);
-    let mut cmd = Command::new(&tools.python);
-    cmd.arg("-I").arg(&tools.script).arg("--exefs").arg(&job.exefs).arg("--game").arg(&job.game_dir);
-    cmd.args(["--jobs", &job.jobs.max(1).to_string()]);
+    let mut cmd = Command::new(python);
+    cmd.arg("-I").arg(script).arg("--exefs").arg(exefs).arg("--game").arg(game_dir);
+    cmd.args(["--jobs", &jobs.max(1).to_string()]);
     quiet(&mut cmd);
-    let mut child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| format!("could not start the game build ({}): {}", tools.python.display(), e))?;
+    let mut child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| format!("could not start the build ({}): {}", python.display(), e))?;
     let out = child.stdout.take().unwrap();
     let err = child.stderr.take().unwrap();
     let (tx, rx) = std::sync::mpsc::channel::<String>();
@@ -142,5 +148,5 @@ pub fn run(job: &Job, tools: &Tools, cancel: &AtomicBool, mut report: impl FnMut
         return Ok(true);
     }
     let tail = err_tail.join().unwrap_or_default();
-    Err(error.unwrap_or_else(|| format!("The game build failed ({}). {}", st, tail.trim())))
+    Err(error.unwrap_or_else(|| format!("The build failed ({}). {}", st, tail.trim())))
 }

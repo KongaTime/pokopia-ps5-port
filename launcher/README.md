@@ -30,6 +30,51 @@ compile with the bundled Zig, link against `pkp_rt.dll`; then the shader steps b
 done. Pause works in every step and Continue setup resumes. Headless check of the whole first run:
 `cargo run --release --example first_run -- <game dir> <exefs> <romfs> <tools dir> [shader limit] [jobs]`.
 
+## PS5 mode
+
+The **PS5** page puts the game on the player's own PS5 as the homebrew title `PPSA90006` (`/data/homebrew/PPSA90006`), with no
+WSL and no developer tools: pick the dump folder, type the console's IP address (its FTP server on port 2121 must be running),
+press **Install on PS5**. Four steps, each with its own bar; Pause stops the running one and Continue picks up where it stopped
+(`src-tauri/src/ps5.rs`):
+
+1. **Build the PS5 title**: `tools\build\ps5_build.py` checks the dump (the same check as the PC build), lifts it with the PC
+   build's own lifter, compiles the lifted code for the console with the bundled clang, links it against the prebuilt runtime,
+   RADV, SDL3 and libvpx, then converts and signs it with `ps5-native-tool` into `<game>\ps5\PPSA90006`. About an hour on a
+   recent PC. The same dump gives the same `eboot.bin` as `ps5/game/build.sh` on Linux: the bundle carries that build's exact
+   `clang -cc1` and `ld.lld` lines and the same LLVM version, and `<game>\ps5\build\done.json` says whether the result matches
+   the release's reference build (`matches_reference`).
+2. **Make the shader cache**: the PC's own shader setup (`shaders.rs`) into `<game>\shader_cache\spirv`. A cache the PC setup
+   already finished is used as it is.
+3. **Upload the game data**: the dump's `exefs\` and `romfs\` (6.75 GB).
+4. **Upload the shaders and the title**: the shader cache (about 40 GB, `results.tsv` last), then the title folder
+   (`eboot.bin` last). It checks the size of `eboot.bin` on the console afterwards: a running title's `eboot.bin` cannot be
+   replaced, so close the game on the PS5 first.
+
+Uploads use four FTP connections and skip files the console already has with the same size, so a stopped upload continues.
+`<game>\ps5\install.json` records finished uploads per console address. After an upload that changed anything, the console's
+`pkp-prepared.txt` is deleted, so the title's **Prepare game** checks the files again. The player then starts `PPSA90006` (the
+first time, installed with their homebrew installer like any fake-signed title), picks **Prepare game** once, then **Play**.
+
+Headless check of the whole install: `cargo run --release --example ps5_install -- <game dir> <exefs> <romfs> <tools dir> <ip>`
+(add `check` to only connect).
+
+### The PS5 toolchain (`tools\ps5`)
+
+Made on the developer's Linux / WSL machine after `ps5/game/build.sh`, by:
+
+```bash
+ps5/tools/bundle-windows.sh <out>/tools/ps5 <clang+llvm-23.1.1-x86_64-pc-windows-msvc folder> <zig.exe>
+```
+
+The LLVM folder is LLVM's official Windows release, extracted; it must be the same version as the Linux clang (the script checks).
+`zig.exe` (the release's own, `tools\build\zig`) builds `ps5-native-tool.exe` from PS5_Vulkan's sources. The folder (about 590 MB,
+about 150 MB zipped) holds `llvm\` (clang, ld.lld, llvm-ar, headers, compiler-rt builtins), `sdk\` (the payload SDK's sysroot),
+`prebuilt\` (the title's own code built by `build.sh`, RADV, SDL3, libvpx, link stubs), `title\` (param.json, icon0.png,
+libc.prx, font), `bin\ps5-native-tool.exe` and `recipe.json` (the compile and link lines with `{SDK}`, `{RES}`, `{PRE}`, `{OBJ}`
+... for paths). Nothing in it comes from the game. Licences: `BUNDLED_TOOLS.txt` and `tools\ps5\licenses`.
+
+The release also needs `tools\build\ps5_build.py` next to `game_build.py` (from `game-build/release_b`).
+
 ## Release folder
 
 The launcher looks for its tools in `tools\` next to its own exe. A release folder must contain:

@@ -10,3 +10,20 @@ Tools bundled for the first-run build (release model b). None of them contains g
 - AMD FidelityFX SDK v2.4.0 upscaler DLLs (upscalers/fsr3: amd_fidelityfx_loader_vk.dll, amd_fidelityfx_upscaler_vk.dll), unchanged and AMD-signed: MIT (LICENSE.FidelityFX-SDK-v2.4.0.txt).
 - NVIDIA Streamline SDK v2.14.16 DLLs (upscalers/streamline: sl.interposer.dll, sl.common.dll, sl.dlss.dll), unchanged and NVIDIA-signed: MIT (LICENSE.Streamline.MIT.txt, NOTICE.Streamline-3rd-party.md).
 - NVIDIA nvngx_dlss.dll (DLSS) is not in this package: its NVIDIA RTX SDKs LICENSE (LICENSE.NVIDIA-RTX-SDKs.txt) does not allow redistribution under a GPL-3.0 package. The launcher's Game files page downloads it from NVIDIA's DLSS repository when the player asks.
+
+PS5 mode (tools/ps5, made by ps5/tools/bundle-windows.sh; recipe.json lists the source revisions). None of it contains game code.
+- LLVM 23.1.1 clang.exe, ld.lld.exe, llvm-ar.exe and clang's headers, from LLVM's official Windows release, and compiler-rt's
+  builtins archive of the same release (llvm/): Apache-2.0 WITH LLVM-exception (licenses/LICENSE.LLVM.txt).
+- PS5 payload SDK sysroot and link scripts (sdk/, github.com/ps5-payload-dev/sdk, with KongaTime's platform layer): GPL-3.0-or-later;
+  its FreeBSD libc headers keep their BSD notices, its libc++/libc++abi/libunwind are Apache-2.0 WITH LLVM-exception.
+- ps5-native-tool.exe (bin/) and the generated libc.prx (title/), from PS5_Vulkan (github.com/mihawk-99/PS5_Vulkan) and
+  BlackBearReloaded's ps5-native-app-boilerplate: GPL-3.0-or-later (licenses/LICENSE.PS5_Vulkan.GPL-3.0.txt); zlib inside it: zlib
+  licence (licenses/LICENSE.zlib.txt).
+- Mesa RADV for the PS5 (prebuilt/libvulkan_radeon.ps5.a, PS5_Vulkan's release build): Mesa's MIT licence, PS5_Vulkan's changes
+  GPL-3.0-or-later.
+- The AGC link stubs (prebuilt/libSceAgc.so, libSceAgcDriver.so), from The-Darkness-Recomp (github.com/portingpete/The-Darkness-Recomp):
+  GPL-3.0. They hold symbol names only.
+- SDL 3.4.12 with this port's PS5 video driver (prebuilt/libSDL3.a): zlib licence. libvpx (prebuilt/libvpx.a): BSD-3-Clause.
+  Dear ImGui (MIT), volk (MIT), Vulkan Memory Allocator (MIT), Vulkan headers (Apache-2.0 / MIT) inside the prebuilt libraries.
+- This port's runtime and title code (prebuilt/libnxrt*.a, libps5*.a, the .o files): GPL-3.0-or-later, built from this repository.
+- icon0.png: the PS5 payload SDK's sample title icon (GPL-3.0-or-later). DejaVuSans.ttf: Bitstream Vera / DejaVu licence.

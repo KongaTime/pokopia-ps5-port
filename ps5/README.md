@@ -8,6 +8,17 @@ You need your own copy of the game, version 2.0.1a, and a PS5 that runs homebrew
 repository or in anything built from it without your dump: you lift and build the game yourself, on your PC, from your
 dump (see [LEGAL.md](../LEGAL.md)). Not affiliated with Nintendo, The Pokémon Company, Koei Tecmo or Sony.
 
+## Install with the launcher (Windows)
+
+The simplest way, with no WSL and no developer tools: open the launcher of a release that has PS5 mode, go to **PS5**, pick your
+2.0.1a dump folder, type your PS5's IP address, start the console's FTP server (port 2121) and press **Install on PS5**. The
+launcher builds and signs the title on your PC from your dump, makes the shader cache and uploads everything to
+`/data/homebrew/PPSA90006`. Each step has its own progress bar; you can pause and continue later. The first install takes hours,
+mostly the upload of about 50 GB. Then start `PPSA90006` on the console and pick **Prepare game**, then **Play** (step 4 below).
+How it works: [launcher/README.md](../launcher/README.md#ps5-mode).
+
+The rest of this page is the Linux / WSL route.
+
 ## What you need
 
 On the console:

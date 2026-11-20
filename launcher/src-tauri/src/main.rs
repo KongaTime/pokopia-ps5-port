@@ -3,10 +3,12 @@
 
 mod dlss;
 mod dump;
+mod ftp;
 mod gamebuild;
 mod ini;
 mod manifest;
 mod play;
+mod ps5;
 mod rawdump;
 mod settings;
 mod shaders;
@@ -34,6 +36,8 @@ struct Config {
     raw_inputs: Vec<String>,
     /// prod.keys and optionally title.keys for raw_inputs (paths only; the launcher never reads them).
     key_files: Vec<String>,
+    /// PS5 mode: the console's address (its FTP server on port 2121 takes the install).
+    ps5_host: String,
 }
 
 fn config_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -310,6 +314,133 @@ fn cancel_setup(state: State<Arc<SetupState>>) {
     state.cancel.store(true, Ordering::SeqCst);
 }
 
+/// PS5 mode: the running install's status and its cancel flag.
+#[derive(Default)]
+struct Ps5State {
+    status: Mutex<ps5::Status>,
+    cancel: AtomicBool,
+}
+
+#[derive(Serialize)]
+struct Ps5Overview {
+    /// the package has the PS5 toolchain (tools/ps5)
+    available: bool,
+    host: String,
+    status: ps5::Status,
+}
+
+#[tauri::command]
+fn ps5_status(app: AppHandle, state: State<Arc<Ps5State>>) -> Ps5Overview {
+    let cfg = load_config(&app);
+    let mut status = state.status.lock().unwrap().clone();
+    if !status.running {
+        // between runs: what is done, from the files on this PC (the last run's outcome and messages stay)
+        let snap = ps5::snapshot(&game_dir_of(&cfg), &cfg.ps5_host);
+        if status.steps.len() == snap.len() {
+            for (s, n) in status.steps.iter_mut().zip(snap) {
+                if n.state == "done" || s.state == "running" {
+                    *s = n;
+                }
+            }
+        } else {
+            status.steps = snap;
+        }
+    }
+    Ps5Overview { available: ps5::available(&exe_dir().join("tools")), host: cfg.ps5_host, status }
+}
+
+/// Stores the console address and checks that its FTP server answers.
+#[tauri::command]
+async fn ps5_check(app: AppHandle, host: String) -> Result<String, String> {
+    let host = ps5::clean_host(&host)?;
+    let mut cfg = load_config(&app);
+    cfg.ps5_host = host.clone();
+    save_config(app, cfg)?;
+    tauri::async_runtime::spawn_blocking(move || ps5::check_console(&host)).await.map_err(|e| e.to_string())?
+}
+
+/// PS5 mode: build, make the shader cache, upload (ps5.rs), on a worker thread with "ps5-status" events. Each step that is done is
+/// skipped, so after Pause this continues.
+#[tauri::command]
+fn ps5_start(app: AppHandle, host: String, state: State<Arc<Ps5State>>, setup: State<Arc<SetupState>>) -> Result<(), String> {
+    let host = ps5::clean_host(&host)?;
+    let mut cfg = load_config(&app);
+    if cfg.ps5_host != host {
+        cfg.ps5_host = host.clone();
+        save_config(app.clone(), cfg.clone())?;
+    }
+    if setup.progress.lock().unwrap().state == "running" {
+        return Err("The PC setup is running. Pause it first (Game files).".into());
+    }
+    let report = dump::scan(&cfg.dump_dir);
+    let chosen = report.chosen.ok_or_else(|| "Choose your game files first.".to_string())?;
+    let m = manifest::get()?;
+    let tools_dir = exe_dir().join("tools");
+    if !ps5::available(&tools_dir) {
+        return Err("This download has no PS5 toolchain (tools/ps5). Use a release that includes PS5 mode.".into());
+    }
+    {
+        let mut s = state.status.lock().unwrap();
+        if s.running {
+            return Err("The PS5 install is already running.".into());
+        }
+        s.running = true;
+    }
+    let st = state.inner().clone();
+    st.cancel.store(false, Ordering::SeqCst);
+    let dir = game_dir_of(&cfg);
+    let jobs = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(2).max(1);
+    let extract_tool = rawdump::find_tool(&tools_dir).ok();
+    std::thread::spawn(move || {
+        let emit = |s: &ps5::Status| {
+            *st.status.lock().unwrap() = s.clone();
+            let _ = app.emit("ps5-status", s.clone());
+        };
+        let result = (|| -> Result<bool, String> {
+            // the lifter and the shader extractor read plain NSOs (rawdump.rs); the console gets the dump's own exefs
+            let exefs = PathBuf::from(&chosen.exefs);
+            let plain = rawdump::exefs_for_build(extract_tool.as_deref(), &exefs, &dir)?;
+            let job = ps5::Job {
+                game_dir: dir.clone(),
+                tools_dir: tools_dir.clone(),
+                exefs: plain.clone(),
+                dump_exefs: exefs,
+                romfs: PathBuf::from(&chosen.romfs),
+                main: plain.join(m.main_file()),
+                host: host.clone(),
+                jobs,
+            };
+            ps5::run(&job, &st.cancel, |s| emit(s))
+        })();
+        let mut s = st.status.lock().unwrap().clone();
+        s.running = false;
+        match result {
+            Ok(true) => {
+                s.outcome = "done".into();
+                s.message = format!("Done. Start {} on your PS5.", ps5::TITLE_ID);
+            }
+            Ok(false) => {
+                s.outcome = "paused".into();
+                s.message = "Paused. Continue picks up where it stopped.".into();
+            }
+            Err(e) => {
+                for step in s.steps.iter_mut().filter(|x| x.state == "running") {
+                    step.state = "error".into();
+                }
+                s.outcome = "error".into();
+                s.message = e;
+            }
+        }
+        emit(&s);
+    });
+    Ok(())
+}
+
+#[tauri::command]
+fn ps5_cancel(state: State<Arc<Ps5State>>) {
+    state.cancel.store(true, Ordering::SeqCst);
+}
+
 #[tauri::command]
 fn dlss_status(app: AppHandle) -> dlss::Status {
     dlss::status(&game_dir_of(&load_config(&app)), &exe_dir().join("tools"))
@@ -364,6 +495,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .manage(play::PlayState::default())
         .manage(Arc::new(SetupState::default()))
+        .manage(Arc::new(Ps5State::default()))
         .setup(|app| {
             // The window carries the game's launcher title from the manifest (tauri.conf.json has a neutral one).
             if let (Ok(m), Some(win)) = (manifest::get(), app.get_webview_window("main")) {
@@ -407,6 +539,10 @@ fn main() {
             game_status,
             open_game_file,
             open_game_dir,
+            ps5_status,
+            ps5_check,
+            ps5_start,
+            ps5_cancel,
         ])
         .run(tauri::generate_context!())
         .expect("error while running the launcher");

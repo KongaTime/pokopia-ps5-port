@@ -6,12 +6,14 @@ import { api, esc, icon, refreshIcons, errText, toast } from './util.js';
 import * as play from './pages/play.js';
 import * as settings from './pages/settings.js';
 import * as setup from './pages/setup.js';
+import * as ps5 from './pages/ps5.js';
 import * as about from './pages/about.js';
 
 const PAGES = {
   play: { mod: play, label: 'Play', icon: 'play' },
   settings: { mod: settings, label: 'Settings', icon: 'settings' },
   setup: { mod: setup, label: 'Game files', icon: 'folder-open' },
+  ps5: { mod: ps5, label: 'PS5', icon: 'monitor' },
   about: { mod: about, label: 'About', icon: 'info' },
 };
 
