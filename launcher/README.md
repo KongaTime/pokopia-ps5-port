@@ -50,7 +50,8 @@ press **Install on PS5**. Four steps, each with its own bar; Pause stops the run
    (`eboot.bin` last). It checks the size of `eboot.bin` on the console afterwards: a running title's `eboot.bin` cannot be
    replaced, so close the game on the PS5 first.
 
-Your own home screen pictures: put `icon0.png` (512x512) and/or `pic0.png` (1920x1080) in `<game>\ps5\art`; the build puts
+Your own home screen pictures: put `icon0.png` (512x512 PNG) and/or the backdrops `pic0.dds` and `pic1.dds` (3840x2160 BC7 DDS,
+from PS5_Vulkan's `tools/prepare-assets.sh --background <picture>`) in `<game>\ps5\art`; the build puts
 them in the title folder (`sce_sys`). The package ships none.
 
 Uploads use four FTP connections and skip files the console already has with the same size, so a stopped upload continues.

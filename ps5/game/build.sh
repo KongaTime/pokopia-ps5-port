@@ -129,8 +129,9 @@ cp "$here/param.json" "$dist/sce_sys/param.json"
 for icon in "$sdk/samples/install_app/FAKE02932/icon0.png" "$HOME/ps5-sdk/samples/install_app/FAKE02932/icon0.png"; do
     [[ -f $icon ]] && { cp "$icon" "$dist/sce_sys/icon0.png"; break; }
 done
-# your own home screen pictures (PKP_ART in ps5/local.env: a folder with icon0.png 512x512 and/or pic0.png 1920x1080; never committed)
-for pic in icon0.png pic0.png; do
+# your own home screen pictures (PKP_ART in ps5/local.env: a folder with icon0.png 512x512 and/or the backdrops pic0.dds and
+# pic1.dds, 3840x2160 BC7 DDS from PS5_Vulkan's tools/prepare-assets.sh; never committed)
+for pic in icon0.png pic0.dds pic1.dds; do
     [[ -n ${PKP_ART:-} && -f $PKP_ART/$pic ]] && cp "$PKP_ART/$pic" "$dist/sce_sys/$pic"
 done
 cp "$vulkan/runtime/libc.prx" "$dist/sce_module/libc.prx"

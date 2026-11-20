@@ -175,9 +175,10 @@ def sign(runner, recipe, elf, obj, title):
         os.makedirs(os.path.dirname(d), exist_ok=True)
         shutil.copyfile(os.path.join(PS5, *src.split('/')), d)
     # the player's own pictures, if they put any in <game>/ps5/art (never in the package: see LEGAL.md): the home screen icon
-    # (512x512 PNG) and backdrop (1920x1080 PNG)
+    # (icon0.png, 512x512 PNG) and backdrops (pic0.dds when the title is selected, pic1.dds while it starts: 3840x2160 BC7
+    # DDS, as PS5_Vulkan's tools/prepare-assets.sh writes them)
     art = os.path.join(os.path.dirname(title), 'art')
-    for name in ('icon0.png', 'pic0.png'):
+    for name in ('icon0.png', 'pic0.dds', 'pic1.dds'):
         if os.path.isfile(os.path.join(art, name)):
             shutil.copyfile(os.path.join(art, name), os.path.join(tmp, 'sce_sys', name))
     shutil.rmtree(title, ignore_errors=True)
