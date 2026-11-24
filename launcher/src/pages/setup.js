@@ -24,7 +24,8 @@ function candidateHtml(c, chosen) {
     </div>`;
 }
 
-// Raw dump mode: NSP / XCI files plus the player's keys, extracted by Set up into <game folder>/dump.
+// Raw dump mode: NSP / XCI files plus the player's keys, or one .nup package (no keys), extracted by Set up into <game folder>/dump.
+const isNup = (inputs) => inputs.length === 1 && /\.nup$/i.test(inputs[0]);
 function rawHtml(raw) {
   const list = (items, empty) =>
     items.length
@@ -36,21 +37,21 @@ function rawHtml(raw) {
   const f = raw.found;
   return `
     <div class="card" id="raw-card">
-      <h2>${icon('hard-drive')}Or: dump files (NSP / XCI)</h2>
+      <h2>${icon('hard-drive')}Or: dump files (NSP / XCI / NUP)</h2>
       <div class="stack">
-        <p class="dim">Pick the game's <code>.nsp</code> or <code>.xci</code> and, if the game needs it, its update <code>.nsp</code>, plus the <code>prod.keys</code> (and <code>title.keys</code>, if you have one) dumped from your own console. Set up decrypts and extracts them into <code>dump/</code> in the game folder (about as much space as the game) and then carries on as with a dump folder. The keys files are only read by the extractor; nothing copies, uploads or logs them.</p>
+        <p class="dim">Pick the game's <code>.nsp</code> or <code>.xci</code> and, if the game needs it, its update <code>.nsp</code>, plus the <code>prod.keys</code> (and <code>title.keys</code>, if you have one) dumped from your own console. Set up decrypts and extracts them into <code>dump/</code> in the game folder (about as much space as the game) and then carries on as with a dump folder. The keys files are only read by the extractor; nothing copies, uploads or logs them. A <code>.nup</code> package is already decrypted and holds the base game and the update in one file: pick only that, no keys needed.</p>
         ${list(raw.inputs, 'No dump files chosen.')}
         <div class="row">
           <button class="btn" id="raw-add">${icon('folder-open')}Add dump files</button>
           <button class="btn" id="raw-keys">${icon('shield-check')}Choose keys</button>
           ${raw.inputs.length || raw.keys.length ? '<button class="btn quiet" id="raw-clear">Clear</button>' : ''}
         </div>
-        ${keyList}
+        ${isNup(raw.inputs) ? '' : keyList}
         ${raw.error ? `<div class="banner danger">${icon('circle-x')}<div style="white-space: pre-wrap">${esc(raw.error)}</div></div>` : ''}
         ${f ? `<p class="dim">${icon('circle-check')} Found ${f.dir === 'base' ? 'the base game' : `update ${esc(f.display_version || String(f.version))}`} (program build ${esc(f.build_id.slice(0, 16).toLowerCase())}..., ${f.files} data files, ${(f.bytes / 1e9).toFixed(1)} GB)${f.zbic_modules ? `, ${f.zbic_modules} ZBIC module(s)` : ''}.</p>` : ''}
         ${f && f.notes.length ? `<ul class="checks">${f.notes.map((n) => `<li>${icon('circle-alert')}${esc(n)}</li>`).join('')}</ul>` : ''}
         <div class="row">
-          <button class="btn ${raw.saved ? '' : 'primary'}" id="raw-use" ${raw.inputs.length && raw.keys.length && !raw.busy ? '' : 'disabled'}>${icon('circle-check')}${raw.busy ? 'Checking...' : 'Use these dump files'}</button>
+          <button class="btn ${raw.saved ? '' : 'primary'}" id="raw-use" ${raw.inputs.length && (raw.keys.length || isNup(raw.inputs)) && !raw.busy ? '' : 'disabled'}>${icon('circle-check')}${raw.busy ? 'Checking...' : 'Use these dump files'}</button>
           ${raw.saved ? `<span class="chip ok">${icon('circle-check')}In use</span>` : ''}
         </div>
       </div>
@@ -190,7 +191,7 @@ export async function render(el, ctx) {
       draw();
     };
     el.querySelector('#raw-add').addEventListener('click', async () => {
-      const files = await api('pick_files', { title: 'Choose your dump files (base game and update)', filterName: 'Switch dumps', extensions: ['nsp', 'xci', 'nsz', 'xcz'], multiple: true });
+      const files = await api('pick_files', { title: 'Choose your dump files (base game and update)', filterName: 'Switch dumps', extensions: ['nsp', 'xci', 'nsz', 'xcz', 'nup'], multiple: true });
       for (const f of files) if (!raw.inputs.includes(f)) raw.inputs.push(f);
       if (files.length) rawChanged();
     });
@@ -218,10 +219,10 @@ export async function render(el, ctx) {
       raw.error = '';
       draw();
       try {
-        raw.found = await api('save_raw', { inputs: raw.inputs, keys: raw.keys });
+        raw.found = await api('save_raw', { inputs: raw.inputs, keys: isNup(raw.inputs) ? [] : raw.keys });
         raw.saved = true;
         cfg.raw_inputs = [...raw.inputs];
-        cfg.key_files = [...raw.keys];
+        cfg.key_files = isNup(raw.inputs) ? [] : [...raw.keys];
         toast('Dump files saved. Next: Set up.', 'ok');
       } catch (e) {
         raw.error = errText(e);

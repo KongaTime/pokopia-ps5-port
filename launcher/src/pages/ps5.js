@@ -33,9 +33,28 @@ function stepHtml(s, i) {
 export async function render(el, ctx) {
   const GAME = ctx.game;
   const cfg = await api('get_config');
-  let path = cfg.dump_dir || '';
+  // the dump is a folder, or one .nup package (unpacked into <game folder>/dump by the install's first step)
+  const isNup = (p) => /\.nup$/i.test(p.trim());
+  const savedNup = (cfg.raw_inputs || []).length === 1 && isNup(cfg.raw_inputs[0]) ? cfg.raw_inputs[0] : '';
+  let path = savedNup || cfg.dump_dir || '';
   let saved = path;
-  let report = path ? await api('validate_dump', { path }) : null;
+  let report = null; // dump folder check (validate_dump)
+  let nup = null; // {found} or {error} for a .nup (check_raw)
+  async function inspect() {
+    report = null;
+    nup = null;
+    if (!path) return;
+    if (isNup(path)) {
+      try {
+        nup = { found: await api('check_raw', { inputs: [path], keys: [] }) };
+      } catch (e) {
+        nup = { error: errText(e) };
+      }
+    } else {
+      report = await api('validate_dump', { path });
+    }
+  }
+  await inspect();
   let ov = await api('ps5_status');
   let host = ov.host || '';
   let check = { busy: false, text: '', ok: null };
@@ -65,7 +84,8 @@ export async function render(el, ctx) {
   function draw() {
     const st = ov.status;
     const running = st.running;
-    const ok = report && report.chosen;
+    const ok = (report && report.chosen) || (nup && nup.found);
+    const nf = nup && nup.found;
     const started = st.steps.some((s) => s.state !== 'pending');
     const allDone = st.steps.length && st.steps.every((s) => s.state === 'done');
     const label = allDone ? 'Check again' : started ? 'Continue' : 'Install on PS5';
@@ -84,10 +104,14 @@ export async function render(el, ctx) {
             <div class="row">
               <input type="text" id="path" spellcheck="false" placeholder="C:/path/to/${esc(GAME.short_title)}_dump" value="${esc(path)}" ${running ? 'disabled' : ''} />
               <button class="btn" id="browse" ${running ? 'disabled' : ''}>${icon('folder-open')}Browse</button>
+              <button class="btn" id="pick-nup" ${running ? 'disabled' : ''}>${icon('file-text')}Pick a .nup</button>
             </div>
-            <p class="faint">Version ${esc(GAME.dump_version || '2.0.1a')}: the folder with <code>base/</code> and <code>updates/&lt;version&gt;/</code>, each with <code>exefs/</code> and <code>romfs/</code>. It is only read.</p>
+            <p class="faint">Version ${esc(GAME.dump_version || '2.0.1a')}: the folder with <code>base/</code> and <code>updates/&lt;version&gt;/</code>, each with <code>exefs/</code> and <code>romfs/</code>, or a <code>.nup</code> file with the base game and the update. It is only read; a .nup is unpacked into <code>dump/</code> in the launcher's folder first (about 7 GB).</p>
             ${report && report.errors.length ? `<div class="banner danger">${icon('circle-x')}<div>${report.errors.map(esc).join('<br>')}</div></div>` : ''}
-            ${ok ? `<p class="dim">${icon('circle-check')} Using ${ok.kind === 'base' ? 'the base game' : `update ${esc(ok.version)}`}: <span class="path">${esc(ok.path)}</span>${saved === path ? '' : ' (not saved yet)'}</p>` : ''}
+            ${nup && nup.error ? `<div class="banner danger">${icon('circle-x')}<div>${esc(nup.error)}</div></div>` : ''}
+            ${nf ? `<p class="dim">${icon('circle-check')} Using the .nup: ${nf.dir === 'base' ? 'the base game' : `update ${esc(String(nf.version))}`}, program build ${esc(nf.build_id.slice(0, 16).toLowerCase())}..., ${nf.files} data files, ${(nf.bytes / 1e9).toFixed(1)} GB${saved === path ? '' : ' (not saved yet)'}</p>` : ''}
+            ${nf && nf.notes.length ? `<ul class="checks">${nf.notes.map((n) => `<li>${icon('circle-alert')}${esc(n)}</li>`).join('')}</ul>` : ''}
+            ${ok && !nf ? `<p class="dim">${icon('circle-check')} Using ${ok.kind === 'base' ? 'the base game' : `update ${esc(ok.version)}`}: <span class="path">${esc(ok.path)}</span>${saved === path ? '' : ' (not saved yet)'}</p>` : ''}
           </div>
         </div>
 
@@ -125,11 +149,18 @@ export async function render(el, ctx) {
     const input = el.querySelector('#path');
     const checkDump = async () => {
       path = input.value.trim();
-      report = path ? await api('validate_dump', { path }) : null;
+      await inspect();
       draw();
     };
     input.addEventListener('change', checkDump);
     input.addEventListener('keydown', (e) => e.key === 'Enter' && checkDump());
+    el.querySelector('#pick-nup').addEventListener('click', async () => {
+      const picked = await api('pick_files', { title: `Choose your ${GAME.short_title} .nup`, filterName: 'NUP packages', extensions: ['nup'], multiple: false });
+      if (picked.length) {
+        input.value = picked[0];
+        checkDump();
+      }
+    });
     el.querySelector('#browse').addEventListener('click', async () => {
       const picked = await api('pick_folder', { title: `Choose your decrypted ${GAME.short_title} dump folder`, start: input.value || null });
       if (picked) {
@@ -141,7 +172,7 @@ export async function render(el, ctx) {
     hostInput.addEventListener('input', () => {
       host = hostInput.value;
       const run = el.querySelector('#run');
-      if (run) run.disabled = !(ov.available && report && report.chosen && host.trim());
+      if (run) run.disabled = !(ov.available && ((report && report.chosen) || (nup && nup.found)) && host.trim());
     });
     el.querySelector('#find').addEventListener('click', () => find(false));
     el.querySelectorAll('[data-host]').forEach((b) =>
@@ -165,7 +196,8 @@ export async function render(el, ctx) {
     el.querySelector('#run')?.addEventListener('click', async () => {
       try {
         if (saved !== path) {
-          await api('save_dump', { path });
+          if (isNup(path)) await api('save_raw', { inputs: [path], keys: [] });
+          else await api('save_dump', { path });
           saved = path;
         }
         await api('ps5_start', { host });

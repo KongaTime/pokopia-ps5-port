@@ -5,7 +5,7 @@ Windows. Built on the Windows recompilation [pokopia-recomp](https://github.com/
 
 [Download the latest release](../../releases/latest)
 
-You need your own copy of the game, version 2.0.1a: an extracted folder, or NSP/XCI files plus your keys. Nothing from the
+You need your own copy of the game, version 2.0.1a: an extracted folder, a `.nup` file, or NSP/XCI files plus your keys. Nothing from the
 game is in this repository or in a release: the game is built from your dump, on your PC. Not affiliated with Nintendo, The
 Pokémon Company, Koei Tecmo or Sony.
 
@@ -14,7 +14,7 @@ Pokémon Company, Koei Tecmo or Sony.
 You need a PS5 that runs homebrew, with its FTP server (port 2121), and a Windows PC on the same network.
 
 1. Unzip the release and run `PokopiaLauncher.exe`.
-2. On the **PS5** page, pick your dump folder, type your PS5's IP address and press **Install on PS5**. It builds and signs
+2. On the **PS5** page, pick your dump folder (or your `.nup` file), type your PS5's IP address and press **Install on PS5**. It builds and signs
    the title on your PC, makes the shader cache and uploads everything to the console (the first time takes hours; you can
    pause and continue).
 3. Install PPSA90006 with your homebrew installer, start it, pick **Prepare game** once, then **Play**.
@@ -33,7 +33,7 @@ Details, settings, logs and the Linux / WSL build: [ps5/README.md](ps5/README.md
 ### Usage
 
 1. Unzip the release and run `PokopiaLauncher.exe`.
-2. On the **Game files** page, pick your dump folder (or your NSP/XCI files and key files) and press Set up. It compiles the game on your PC (about 20 minutes), then builds the shader cache (1 to 2 hours). You can pause it and continue later.
+2. On the **Game files** page, pick your dump folder (or your `.nup` file, or your NSP/XCI files and key files) and press Set up. It compiles the game on your PC (about 20 minutes), then builds the shader cache (1 to 2 hours). You can pause it and continue later.
 3. Press Play.
 
 F1 opens the settings in game. Middle mouse toggles Joy-Con 2 mouse mode for placing items.

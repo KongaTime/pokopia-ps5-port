@@ -7,6 +7,7 @@ mod ftp;
 mod gamebuild;
 mod ini;
 mod manifest;
+mod nup;
 mod play;
 mod ps5;
 mod rawdump;
@@ -31,8 +32,8 @@ struct Config {
     /// Folder with the game exe. Empty: the folder the launcher is in.
     game_dir: String,
     minimize_on_play: bool,
-    /// Raw dump mode: the player's NSP / XCI files. When set, Set up first extracts them into `<game>/dump` (rawdump.rs), which is
-    /// then `dump_dir`. Choosing a dump folder clears it.
+    /// Raw dump mode: the player's NSP / XCI files, or one `.nup` package. When set, Set up first extracts them into `<game>/dump`
+    /// (rawdump.rs, nup.rs), which is then `dump_dir`. Choosing a dump folder clears it.
     raw_inputs: Vec<String>,
     /// prod.keys and optionally title.keys for raw_inputs (paths only; the launcher never reads them).
     key_files: Vec<String>,
@@ -147,12 +148,59 @@ async fn pick_files(app: AppHandle, title: String, filter_name: String, extensio
     picked.into_iter().filter_map(|p| p.into_path().ok()).map(|p| dump::fwd(&p)).collect()
 }
 
-/// Raw dump mode: what the dump files hold, read with the player's keys (nothing is written).
+/// True when the raw dump is one `.nup` package (nup.rs: already decrypted, no keys). Mixing it with NSP / XCI files is refused.
+fn nup_mode(inputs: &[String]) -> Result<bool, String> {
+    let n = inputs.iter().filter(|p| nup::is_nup(p)).count();
+    if n == 0 {
+        return Ok(false);
+    }
+    if inputs.len() > 1 {
+        return Err("Pick only the .nup file: it already holds the base game and the update. Remove the other dump files.".into());
+    }
+    if !std::path::Path::new(&inputs[0]).is_file() {
+        return Err(format!("{} does not exist or cannot be read.", inputs[0]));
+    }
+    Ok(true)
+}
+
+/// Raw dump mode: what the dump files hold, read with the player's keys, or from the .nup (nothing is written).
 #[tauri::command]
 async fn check_raw(inputs: Vec<String>, keys: Vec<String>) -> Result<rawdump::Found, String> {
+    let m = manifest::get()?;
+    let title_id = m.game.title_id.clone();
+    if nup_mode(&inputs)? {
+        let main = m.main_file();
+        let path = PathBuf::from(&inputs[0]);
+        let i = tauri::async_runtime::spawn_blocking(move || nup::info(&path, &title_id, &main)).await.map_err(|e| e.to_string())??;
+        return Ok(rawdump::Found { dir: i.dir, version: i.version, display_version: String::new(), build_id: i.build_id, files: i.files, bytes: i.bytes, zbic_modules: i.zbic_modules, notes: i.notes });
+    }
     let tool = rawdump::find_tool(&exe_dir().join("tools"))?;
-    let title_id = manifest::get()?.game.title_id.clone();
     tauri::async_runtime::spawn_blocking(move || rawdump::check(&tool, &inputs, &keys, &title_id)).await.map_err(|e| e.to_string())?
+}
+
+/// Raw dump mode, run by Set up and by the PS5 install: extracts the NSP / XCI files or unpacks the .nup into `out`, unless that
+/// was done already. `report(done, total, message)`. Ok(true) = ready, Ok(false) = paused.
+fn extract_raw(cfg: &Config, tool: Option<&std::path::Path>, title_id: &str, out: &std::path::Path, cancel: &AtomicBool, mut report: impl FnMut(u64, u64, String)) -> Result<bool, String> {
+    if rawdump::is_extracted(out, &cfg.raw_inputs) {
+        return Ok(true);
+    }
+    if nup_mode(&cfg.raw_inputs)? {
+        return nup::extract(
+            std::path::Path::new(&cfg.raw_inputs[0]),
+            out,
+            &mut |d, t, _| report(d, t, "Unpacking the game files from your .nup...".to_string()),
+            &|| cancel.load(Ordering::SeqCst),
+        );
+    }
+    let tool = tool.ok_or("The dump extractor (tools/extract/nx_extract.exe) is missing.")?;
+    rawdump::extract(tool, &cfg.raw_inputs, &cfg.key_files, title_id, out, cancel, |t| {
+        let message = match t.phase.as_str() {
+            "verify" => "Checking your dump files...".to_string(),
+            "romfs" => "Extracting the game data from your dump...".to_string(),
+            _ => t.message,
+        };
+        report(t.done, t.total, message)
+    })
 }
 
 /// Raw dump mode: checks and stores the dump files and keys; Set up extracts them into `<game>/dump` and uses that folder.
@@ -246,7 +294,7 @@ fn start_setup(app: AppHandle, state: State<Arc<SetupState>>) -> Result<(), Stri
     if !package_b && !dir.join(&m.files.exe).is_file() {
         return Err(format!("{0} was not found in {1}. Put the launcher next to {0} or set the game folder in Settings.", m.files.exe, dump::fwd(&dir)));
     }
-    let extract_tool = if raw { Some(rawdump::find_tool(&tools_dir)?) } else { rawdump::find_tool(&tools_dir).ok() };
+    let extract_tool = if raw && !nup_mode(&cfg.raw_inputs)? { Some(rawdump::find_tool(&tools_dir)?) } else { rawdump::find_tool(&tools_dir).ok() };
     {
         let mut p = state.progress.lock().unwrap();
         if p.state == "running" {
@@ -265,19 +313,11 @@ fn start_setup(app: AppHandle, state: State<Arc<SetupState>>) -> Result<(), Stri
         let result = (|| -> Result<bool, String> {
             if raw {
                 let out = dir.join(rawdump::OUT_REL);
-                if !rawdump::is_extracted(&out, &cfg.raw_inputs) {
-                    let tool = extract_tool.as_deref().ok_or("The dump extractor is missing.")?;
-                    let done = rawdump::extract(tool, &cfg.raw_inputs, &cfg.key_files, &m.game.title_id, &out, &st.cancel, |t| {
-                        let message = match t.phase.as_str() {
-                            "verify" => "Checking your dump files...".to_string(),
-                            "romfs" => "Extracting the game data from your dump...".to_string(),
-                            _ => t.message,
-                        };
-                        emit(shaders::Progress { state: "running".into(), phase: "dump".into(), done: t.done, total: t.total, message })
-                    })?;
-                    if !done {
-                        return Ok(false);
-                    }
+                let done = extract_raw(&cfg, extract_tool.as_deref(), &m.game.title_id, &out, &st.cancel, |done, total, message| {
+                    emit(shaders::Progress { state: "running".into(), phase: "dump".into(), done, total, message })
+                })?;
+                if !done {
+                    return Ok(false);
                 }
             }
             let report = dump::scan(&cfg.dump_dir);
@@ -378,8 +418,12 @@ fn ps5_start(app: AppHandle, host: String, state: State<Arc<Ps5State>>, setup: S
     if setup.progress.lock().unwrap().state == "running" {
         return Err("The PC setup is running. Pause it first (Game files).".into());
     }
-    let report = dump::scan(&cfg.dump_dir);
-    let chosen = report.chosen.ok_or_else(|| "Choose your game files first.".to_string())?;
+    let raw = !cfg.raw_inputs.is_empty();
+    if raw {
+        nup_mode(&cfg.raw_inputs)?;
+    } else {
+        dump::scan(&cfg.dump_dir).chosen.ok_or_else(|| "Choose your game files first.".to_string())?;
+    }
     let m = manifest::get()?;
     let tools_dir = exe_dir().join("tools");
     if !ps5::available(&tools_dir) {
@@ -403,6 +447,24 @@ fn ps5_start(app: AppHandle, host: String, state: State<Arc<Ps5State>>, setup: S
             let _ = app.emit("ps5-status", s.clone());
         };
         let result = (|| -> Result<bool, String> {
+            if raw {
+                // the .nup or the NSP / XCI files first become a dump folder in <game>/dump, shown on the first step's bar
+                let mut s = ps5::Status { running: true, steps: ps5::snapshot(&dir, &host), ..Default::default() };
+                let done = extract_raw(&cfg, extract_tool.as_deref(), &m.game.title_id, &dir.join(rawdump::OUT_REL), &st.cancel, |done, total, message| {
+                    if let Some(step) = s.steps.first_mut() {
+                        step.state = "running".into();
+                        step.done = done;
+                        step.total = total;
+                        step.message = message;
+                    }
+                    emit(&s);
+                })?;
+                if !done {
+                    return Ok(false);
+                }
+            }
+            let report = dump::scan(&cfg.dump_dir);
+            let chosen = report.chosen.ok_or_else(|| format!("The game files at {} are not usable: {}", cfg.dump_dir, report.errors.join(" ")))?;
             // the lifter and the shader extractor read plain NSOs (rawdump.rs); the console gets the dump's own exefs
             let exefs = PathBuf::from(&chosen.exefs);
             let plain = rawdump::exefs_for_build(extract_tool.as_deref(), &exefs, &dir)?;

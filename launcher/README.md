@@ -7,6 +7,12 @@ files you extracted from your own copy, writes `pkp.ini` next to `pkp.exe` and b
 
 1. **Game files**: pick the dump folder (`<dump>\base\{exefs,romfs}` and/or `<dump>\updates\<version>\{exefs,romfs}`).
    The newest complete update is used, otherwise the base. "Use these game files" writes `[fs] exefs` and `[fs] romfs`.
+   Instead of a folder, the player can pick NSP / XCI files plus their keys (`rawdump.rs`, `tools\extract\nx_extract.exe`), or
+   one `.nup` package ([a55uka/nup](https://github.com/a55uka/nup) format 1, `src-tauri/src/nup.rs`, ported from the
+   fefw-recomp launcher). A .nup is already decrypted and holds the base game and the update, so it needs no keys. Set up
+   (and the PS5 install) first unpacks either into `dump\` next to the launcher (about 7 GB), then carries on as with a dump
+   folder. The .nup unpack checks the title ID, writes each file as `.part` and renames it when complete, so Pause keeps the
+   finished files; `cargo run --release --example nup_unpack -- <file.nup> <title id> [<out dir>]` does the same from a terminal.
 2. **Set up**: writes the `pkp.ini` paths (`[fs] exefs`, `[fs] romfs`, `[fs] save_dir`, `[nvn] shader_cache =
    shader_cache/spirv`) and builds `shader_cache\spirv\` next to `pkp.exe`:
    - Extract: `tools\shaders\extract_corpus.py` finds every shader in the romfs and in `exefs\main` and writes the
@@ -33,7 +39,7 @@ done. Pause works in every step and Continue setup resumes. Headless check of th
 ## PS5 mode
 
 The **PS5** page puts the game on the player's own PS5 as the homebrew title `PPSA90006` (`/data/homebrew/PPSA90006`), with no
-WSL and no developer tools: pick the dump folder, type the console's IP address (its FTP server on port 2121 must be running),
+WSL and no developer tools: pick the dump folder or a `.nup` (unpacked into `dump\` first, on the first step's bar), type the console's IP address (its FTP server on port 2121 must be running),
 press **Install on PS5**. Four steps, each with its own bar; Pause stops the running one and Continue picks up where it stopped
 (`src-tauri/src/ps5.rs`):
 
