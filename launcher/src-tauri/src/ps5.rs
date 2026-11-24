@@ -221,6 +221,9 @@ pub struct Job {
     /// the dump's own ExeFS, uploaded as it is (the runtime reads ZBIC itself)
     pub dump_exefs: PathBuf,
     pub romfs: PathBuf,
+    /// The player's .nup, when the dump came as one: the console gets that one file (in dump/) instead of exefs/ and romfs/, and
+    /// reads the game from it in place.
+    pub nup: Option<PathBuf>,
     /// exefs/main as the shader extractor reads it (a plain NSO)
     pub main: PathBuf,
     pub host: String,
@@ -278,12 +281,15 @@ pub fn run(job: &Job, cancel: &AtomicBool, mut emit: impl FnMut(&Status)) -> Res
     }
 
     let mut m = read_marker(&job.game_dir);
-    let romfs_key = job.romfs.to_string_lossy().to_string();
+    let romfs_key = job.nup.as_ref().unwrap_or(&job.romfs).to_string_lossy().to_string();
     let mut changed = false;
 
-    // 3. game data
-    if !m.data.contains_key(&host) {
-        let pairs = vec![(job.dump_exefs.clone(), format!("{}/exefs", REMOTE)), (job.romfs.clone(), format!("{}/romfs", REMOTE))];
+    // 3. game data: the .nup as it is, or the dump's exefs/ and romfs/
+    if m.data.get(&host) != Some(&romfs_key) {
+        let pairs = match &job.nup {
+            Some(nup) => vec![(nup.clone(), format!("{}/dump/{}", REMOTE, nup.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "game.nup".into())))],
+            None => vec![(job.dump_exefs.clone(), format!("{}/exefs", REMOTE)), (job.romfs.clone(), format!("{}/romfs", REMOTE))],
+        };
         let r = sync(&host, &pairs, &[], cancel, |done, total, msg| {
             set(&mut st, 2, "running", done, total, msg);
             emit(&st);
@@ -302,9 +308,18 @@ pub fn run(job: &Job, cancel: &AtomicBool, mut emit: impl FnMut(&Status)) -> Res
         emit(&st);
     }
 
-    // 4. shaders, then the title (eboot.bin last)
+    // 4. shaders (packed into one file), then the title (eboot.bin last)
     let spirv = job.game_dir.join(shaders::SPIRV_REL);
     let results = spirv.join("results.tsv");
+    let ok = shaders::make_pack(&job.game_dir, cancel, |done, total, msg| {
+        set(&mut st, 3, "running", done, total, msg);
+        emit(&st);
+    })?;
+    if !ok {
+        set(&mut st, 3, "paused", 0, 0, "Paused.".into());
+        emit(&st);
+        return Ok(false);
+    }
     let results_len = fs::metadata(&results).map(|x| x.len()).map_err(|_| format!("{} is missing", results.display()))?;
     let eboot = eboot_sha(&job.game_dir);
     if m.shaders.get(&host) != Some(&results_len) || m.title.get(&host) != Some(&eboot) {
@@ -323,7 +338,7 @@ pub fn run(job: &Job, cancel: &AtomicBool, mut emit: impl FnMut(&Status)) -> Res
         for (rel, _) in &title_files {
             last.push((title.join(rel), format!("{}/{}", REMOTE, rel)));
         }
-        let pairs = vec![(spirv.clone(), format!("{}/shader_cache/spirv", REMOTE))];
+        let pairs = vec![(job.game_dir.join(shaders::PACK_REL), format!("{}/shader_cache/spirv/spirv.pack", REMOTE))];
         let r = sync(&host, &pairs, &last, cancel, |done, total, msg| {
             set(&mut st, 3, "running", done, total, msg);
             emit(&st);
@@ -383,8 +398,9 @@ fn gb(b: u64) -> String {
     format!("{:.1} GB", b as f64 / 1e9)
 }
 
-/// Uploads each local folder to its remote folder, skipping files the console already has with the same size, on WORKERS
-/// connections; then `last` (always sent, in order, on one connection). Some(files sent) = done, None = cancelled.
+/// Uploads each local folder to its remote folder (or a local file to that remote file), skipping files the console already has
+/// with the same size, on WORKERS connections; then `last` (always sent, in order, on one connection). Some(files sent) = done,
+/// None = cancelled.
 pub fn sync(host: &str, pairs: &[(PathBuf, String)], last: &[(PathBuf, String)], cancel: &AtomicBool, mut report: impl FnMut(u64, u64, String)) -> Result<Option<u64>, String> {
     report(0, 0, "Checking what is already on the PS5...".into());
     let mut todo: Vec<(PathBuf, String, u64)> = Vec::new();
@@ -392,6 +408,16 @@ pub fn sync(host: &str, pairs: &[(PathBuf, String)], last: &[(PathBuf, String)],
     let mut dirs: HashSet<String> = HashSet::new();
     let mut listed = 0usize;
     for (local, remote) in pairs {
+        if local.is_file() {
+            let (rdir, name) = remote.rsplit_once('/').ok_or("bad remote path")?;
+            let size = fs::metadata(local).map(|m| m.len()).unwrap_or(0);
+            let have = ctrl.list(rdir)?.into_iter().find(|e| !e.dir && e.name == name).map(|e| e.size);
+            if have != Some(size) {
+                todo.push((local.clone(), remote.clone(), size));
+                dirs.insert(rdir.to_string());
+            }
+            continue;
+        }
         if !local.is_dir() {
             return Err(format!("{} does not exist", local.display()));
         }

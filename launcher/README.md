@@ -51,9 +51,13 @@ press **Install on PS5**. Four steps, each with its own bar; Pause stops the run
    the release's reference build (`matches_reference`).
 2. **Make the shader cache**: the PC's own shader setup (`shaders.rs`) into `<game>\shader_cache\spirv`. A cache the PC setup
    already finished is used as it is.
-3. **Upload the game data**: the dump's `exefs\` and `romfs\` (6.75 GB).
-4. **Upload the shaders and the title**: the shader cache (about 40 GB, `results.tsv` last), then the title folder
-   (`eboot.bin` last). It checks the size of `eboot.bin` on the console afterwards: a running title's `eboot.bin` cannot be
+3. **Upload the game data**: the dump's `exefs\` and `romfs\` (6.75 GB), or, when the dump is a `.nup`, that one file to
+   `PPSA90006/dump/`. The title reads the romfs straight out of the .nup in place and writes its five exefs files to
+   `PPSA90006/exefs` at start-up (`runtime/src/services/fs_nup.cpp`, `fs_romfs.cpp`; `ps5/game/pkp_ps5_main.cpp`). A .nup on
+   the console wins over loose `romfs/` and `exefs/` folders, which can then be deleted.
+4. **Upload the shaders and the title**: the shader cache packed into one file, `shader_cache\pack\spirv.pack` (each shader one
+   zstd frame, about 11 GB instead of 40 GB in ~100,000 files; `shaders.rs` make_pack, read by `nvn_shaders.cpp` SpvPack; a
+   loose `<hash>.spv` on the console still wins), and `results.tsv` last, then the title folder (`eboot.bin` last). It checks the size of `eboot.bin` on the console afterwards: a running title's `eboot.bin` cannot be
    replaced, so close the game on the PS5 first.
 
 Your own home screen pictures: put `icon0.png` (512x512 PNG) and/or the backdrops `pic0.dds` and `pic1.dds` (3840x2160 BC7 DDS,
@@ -66,7 +70,8 @@ Uploads use four FTP connections and skip files the console already has with the
 first time, installed with their homebrew installer like any fake-signed title), picks **Prepare game** once, then **Play**.
 
 Headless check of the whole install: `cargo run --release --example ps5_install -- <game dir> <exefs> <romfs> <tools dir> <ip>`
-(add `check` to only connect).
+(add `check` to only connect, or `- <file.nup>` to send a .nup as the game data). `cargo run --release --example shader_pack --
+<game dir>` makes the pack and checks every shader in it against the loose file.
 
 ### The PS5 toolchain (`tools\ps5`)
 

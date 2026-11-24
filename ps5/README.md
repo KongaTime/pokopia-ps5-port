@@ -14,7 +14,7 @@ The simplest way, with no WSL and no developer tools: open the launcher of a rel
 2.0.1a dump folder, type your PS5's IP address, start the console's FTP server (port 2121) and press **Install on PS5**. The
 launcher builds and signs the title on your PC from your dump, makes the shader cache and uploads everything to
 `/data/homebrew/PPSA90006`. Each step has its own progress bar; you can pause and continue later. The first install takes hours,
-mostly the upload of about 50 GB. Then start `PPSA90006` on the console and pick **Prepare game**, then **Play** (step 4 below).
+mostly the shader cache and the upload (about 18 GB: the game data, or your `.nup`, and the shaders packed into one file). Then start `PPSA90006` on the console and pick **Prepare game**, then **Play** (step 4 below).
 How it works: [launcher/README.md](../launcher/README.md#ps5-mode).
 
 The rest of this page is the Linux / WSL route.
@@ -25,7 +25,8 @@ On the console:
 
 - a PS5 that runs homebrew titles from `/data/homebrew` (the same set-up as other fake-signed homebrew ports)
 - an FTP server on port 2121 (to upload the game; the console's homebrew tools usually include one)
-- about 50 GB free: the shader cache (40.5 GB, 99,251 files), the game data (6.75 GB) and the title (300 MB)
+- about 20 GB free with the launcher (the game data or your `.nup`, 7 GB; the shaders as one `spirv.pack`, 11 GB; the title,
+  300 MB), or about 50 GB with this page's route (the shader cache as 99,251 loose files, 40.5 GB)
 
 On the PC (Linux, or Windows with WSL; an Arch or Ubuntu WSL distro works):
 

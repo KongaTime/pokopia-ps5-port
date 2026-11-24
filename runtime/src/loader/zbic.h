@@ -14,5 +14,7 @@ constexpr uint32_t kNsoFlagZbic = 1u << 7;           // NSO0 header +0x0C
 bool zbic_is_frame(const void* src, size_t n);
 // Decompresses one segment (one or more ZBIC frames) into dst. True only when it decodes cleanly to exactly dst_size bytes.
 bool zbic_decompress(void* dst, size_t dst_size, const void* src, size_t src_size);
+// Decompresses one ordinary zstd frame (the same decoder) into dst. True only when it decodes cleanly to exactly dst_size bytes.
+bool zstd_decompress(void* dst, size_t dst_size, const void* src, size_t src_size);
 
 }  // namespace nxrt

@@ -6,6 +6,7 @@
 #define NOMINMAX
 #endif
 #include "fs_romfs.h"
+#include "fs_nup.h"
 
 #include <windows.h>
 
@@ -102,6 +103,7 @@ struct Node {
     std::string name;            // UTF-8; empty for the root
     std::string path;            // image path: "" for the root, "/a/b" otherwise
     std::wstring host;           // host path to open
+    uint64_t host_ofs = 0;       // files: where the data starts in the host file (0, or the file's place in a .nup)
     bool is_dir = false;
     uint64_t size = 0;           // files only
     std::vector<Node> kids;      // sorted by name bytes
@@ -200,7 +202,35 @@ struct FileRec {
     uint64_t size = 0;
     uint64_t image_off = 0;
     std::string path;            // path inside the image ("/a/b.bin"), for the first-read note
+    uint64_t host_ofs = 0;       // where the data starts in the host file
 };
+
+// The romfs tree of a .nup as Nodes: every file is a stored range of the one package file.
+bool from_nup(const nup::Entry& e, Node& n, const std::wstring& host, std::string& msg) {
+    for (const nup::Entry& k : e.kids) {
+        Node c;
+        c.name = k.name;
+        c.path = n.path + "/" + k.name;
+        if (k.name.size() > kMaxName || c.path.size() > kMaxPath) {
+            msg = "name too long for a RomFS: " + c.path;
+            return false;
+        }
+        c.host = host;
+        if (k.dir) {
+            c.is_dir = true;
+            if (!from_nup(k, c, host, msg)) return false;
+        } else {
+            if (k.codec != 0 || k.stored != k.size) {
+                msg = c.path + " is compressed in the .nup, so it cannot be read in place: unpack the .nup on a PC and use the folder";
+                return false;
+            }
+            c.size = k.size;
+            c.host_ofs = k.offset;
+        }
+        n.kids.push_back(std::move(c));
+    }
+    return true;
+}
 
 // Everything build() produces. Replaced as a whole.
 struct Layout {
@@ -224,16 +254,25 @@ bool make_layout(const std::string& host_dir, Layout& L, std::string* err) {
     }
     std::error_code ec;
     const std::filesystem::path abs = std::filesystem::absolute(std::filesystem::path(wdir), ec);
-    if (ec || !std::filesystem::is_directory(abs, ec)) {
-        if (err) *err = "not a folder: " + host_dir;
-        return false;
-    }
     Node root;
     root.is_dir = true;
-    root.host = long_path(abs.wstring());
-    if (!scan(root, msg)) {
-        if (err) *err = msg;
-        return false;
+    if (nup::is_nup_path(host_dir) && !ec && std::filesystem::is_regular_file(abs, ec)) {
+        nup::Program prog;
+        if (!nup::read_program(host_dir, prog, err)) return false;
+        if (!from_nup(prog.romfs, root, long_path(abs.wstring()), msg)) {
+            if (err) *err = msg;
+            return false;
+        }
+    } else {
+        if (ec || !std::filesystem::is_directory(abs, ec)) {
+            if (err) *err = "not a folder: " + host_dir;
+            return false;
+        }
+        root.host = long_path(abs.wstring());
+        if (!scan(root, msg)) {
+            if (err) *err = msg;
+            return false;
+        }
     }
 
     std::vector<Node*> dirs{&root}, files;
@@ -349,8 +388,8 @@ bool make_layout(const std::string& host_dir, Layout& L, std::string* err) {
         const uint64_t img = kPartitionOfs + f->data;
         if (img > cursor) L.segs.push_back({cursor, img - cursor, Segment::Kind::kZero, 0, 0});
         const uint32_t idx = static_cast<uint32_t>(L.files.size());
-        L.files.push_back({f->host, f->size, img, f->path});
-        if (f->size > 0) L.segs.push_back({img, f->size, Segment::Kind::kFile, 0, idx});
+        L.files.push_back({f->host, f->size, img, f->path, f->host_ofs});
+        if (f->size > 0) L.segs.push_back({img, f->size, Segment::Kind::kFile, f->host_ofs, idx});
         L.by_path[f->path] = idx;
         cursor = img + f->size;
         data_bytes += f->size;

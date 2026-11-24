@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // The title's start screen (title_screen.h). Drawn with Dear ImGui on the renderer's overlay hook, before the NVN back end owns the
 // renderer. Prepare game runs on a worker thread:
-//   1. the game files: exefs/rtld, main, sdk, subsdk0 and romfs/, and that main is the 2.0.1a build the title was lifted from;
-//   2. the shader cache: results.tsv and every <hash>.spv it lists (an upload that stopped part way shows here as missing files);
+//   1. the game files: exefs/rtld, main, sdk, subsdk0 and romfs/ (or the .nup the romfs is read from), and that main is the 2.0.1a build
+//      the title was lifted from;
+//   2. the shader cache: results.tsv and every <hash>.spv it lists, loose or in spirv.pack (an upload that stopped part way shows here as
+//      missing files);
 //   3. the folders the game writes (save/), then pkp-prepared.txt, which later starts skip straight to Play.
 // Pictures are the player's own, never shipped: /app0/title.png is the background (cover-fitted; otherwise a drawn gradient) and
 // /app0/logo.png goes where the name is (otherwise the name in letters; with a title.png and no logo.png the picture's own name
@@ -35,6 +37,7 @@
 #include "nxrt/input.h"
 #include "nxrt/log.h"
 #include "nxrt/platform.h"
+#include "../../runtime/src/services/fs_nup.h"
 
 // The start screen's fonts, built into the title (PKP_FONT_DIR: ps5/assets/fonts, set by ps5/CMakeLists.txt).
 #define PKP_EMBED(sym, file)                                                                                                        \
@@ -131,7 +134,7 @@ void prepare_run(Prepare* p, std::string game) {
     const std::string romfs = nxrt::config_get_str("fs", "romfs", (game + "/romfs").c_str());
     for (const char* m : {"rtld", "main", "sdk", "subsdk0"})
         if (!exists(exefs + "/" + m)) {
-            fail("The game files were not found (no " + exefs + "/" + m + ").\nCopy exefs/ and romfs/ from your 2.0.1a dump into " + game + ".");
+            fail("The game files were not found (no " + exefs + "/" + m + ").\nCopy your .nup into " + game + "/dump, or exefs/ and romfs/ from your 2.0.1a dump into " + game + ".");
             p->done = true;
             return;
         }
@@ -141,8 +144,16 @@ void prepare_run(Prepare* p, std::string game) {
         p->done = true;
         return;
     }
-    if (!dir_has_entries(romfs)) {
-        fail("The game's romfs/ folder was not found or is empty (" + romfs + ").\nCopy romfs/ from your 2.0.1a dump into " + game + ".");
+    if (nxrt::services::fs::nup::is_nup_path(romfs)) {
+        nxrt::services::fs::nup::Program prog;
+        std::string err;
+        if (!nxrt::services::fs::nup::read_program(romfs, prog, &err)) {
+            fail("The game package cannot be read:\n" + err);
+            p->done = true;
+            return;
+        }
+    } else if (!dir_has_entries(romfs)) {
+        fail("The game's romfs/ folder was not found or is empty (" + romfs + ").\nCopy your .nup into " + game + "/dump, or romfs/ from your 2.0.1a dump into " + game + ".");
         p->done = true;
         return;
     }
@@ -171,9 +182,31 @@ void prepare_run(Prepare* p, std::string game) {
     if (hashes.empty()) {
         warning = "No shader cache was found, so the game will run without graphics for most things.\nUpload it to " + sdir + ".";
     } else {
+        // spirv.pack (one file with every shader, runtime/src/gfx/nvn/nvn_shaders.cpp SpvPack): its index of hashes, sorted
+        std::vector<uint64_t> packed;
+        if (std::FILE* f = std::fopen((sdir + "/spirv.pack").c_str(), "rb")) {
+            char head[24] = {};
+            if (std::fread(head, 1, sizeof head, f) == sizeof head && std::memcmp(head, "NXSPPAK1", 8) == 0) {
+                uint32_t count = 0;
+                uint64_t index = 0;
+                std::memcpy(&count, head + 8, 4);
+                std::memcpy(&index, head + 16, 8);
+                std::vector<uint8_t> recs(static_cast<size_t>(count) * 24);
+                if (fseeko(f, static_cast<off_t>(index), SEEK_SET) == 0 && std::fread(recs.data(), 1, recs.size(), f) == recs.size()) {
+                    packed.resize(count);
+                    for (uint32_t i = 0; i < count; ++i) std::memcpy(&packed[i], recs.data() + 24 * size_t(i), 8);
+                }
+            }
+            std::fclose(f);
+        }
+        auto in_pack = [&](const std::string& h) {
+            if (packed.empty() || h.size() != 16) return false;
+            const uint64_t v = std::strtoull(h.c_str(), nullptr, 16);
+            return std::binary_search(packed.begin(), packed.end(), v);
+        };
         size_t missing = 0;
         for (size_t i = 0; i < hashes.size(); ++i) {
-            if (!exists(sdir + "/" + hashes[i] + ".spv")) ++missing;
+            if (!in_pack(hashes[i]) && !exists(sdir + "/" + hashes[i] + ".spv")) ++missing;
             if ((i & 255) == 0) p->progress = 0.20f + 0.75f * static_cast<float>(i) / static_cast<float>(hashes.size());
         }
         NXLOG_I(kTag, "prepare: %zu shaders listed, %zu missing", hashes.size(), missing);

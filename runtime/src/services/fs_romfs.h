@@ -21,6 +21,7 @@ public:
     ~RomfsImage();
     // Scans `host_dir` (recursively; names are taken as UTF-8 from the host paths) and builds the tables. False with *err set when the
     // folder does not exist or an entry cannot be described. Replaces an earlier build.
+    // `host_dir` may instead name a .nup package (fs_nup.h): the game program's romfs is then served from inside that one file, in place.
     bool build(const std::string& host_dir, std::string* err = nullptr);
     bool built() const;
     uint64_t size() const;                                  // total image size in bytes

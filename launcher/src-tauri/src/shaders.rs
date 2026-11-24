@@ -29,6 +29,9 @@ use std::time::Duration;
 
 /// Folder (in the game folder) the runtime opens by default; also what setup writes as `[nvn] shader_cache`.
 pub const SPIRV_REL: &str = "shader_cache/spirv";
+/// The whole cache as one file for the PS5 (make_pack), and the results.tsv size it was made from.
+pub const PACK_REL: &str = "shader_cache/pack/spirv.pack";
+const PACK_STAMP_REL: &str = "shader_cache/pack/spirv.pack.json";
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 #[serde(default)]
@@ -222,6 +225,86 @@ fn log(game_dir: &Path, text: &str) {
     if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(cache_dir(game_dir).join("setup.log")) {
         let _ = writeln!(f, "{} {}", secs, text);
     }
+}
+
+/// Packs every shader results.tsv lists into `<game>/shader_cache/pack/spirv.pack`, the one file the PS5 gets instead of the
+/// ~100,000 loose `<hash>.spv` (about a quarter of their size: each is one zstd frame). The runtime reads it as the loose files
+/// (runtime/src/gfx/nvn/nvn_shaders.cpp SpvPack): "NXSPPAK1", u32 count, u32 0, u64 index offset, the frames, then the index of
+/// {u64 hash, u64 offset, u32 stored size, u32 size} sorted by hash. Reused while results.tsv has the same size. Ok(false) = paused.
+pub fn make_pack(game_dir: &Path, cancel: &AtomicBool, mut report: impl FnMut(u64, u64, String)) -> Result<bool, String> {
+    let results = game_dir.join(SPIRV_REL).join("results.tsv");
+    let rlen = fs::metadata(&results).map(|m| m.len()).map_err(|_| format!("{} is missing", results.display()))?;
+    let out = game_dir.join(PACK_REL);
+    let stamp = game_dir.join(PACK_STAMP_REL);
+    if out.is_file() && fs::read_to_string(&stamp).map(|s| s.trim() == rlen.to_string()).unwrap_or(false) {
+        return Ok(true);
+    }
+    let (_, rows) = read_tsv(&results)?;
+    let mut hashes: Vec<u64> = rows.iter().filter_map(|r| u64::from_str_radix(first_col(r), 16).ok().filter(|_| first_col(r).len() == 16)).collect();
+    hashes.sort_unstable();
+    hashes.dedup();
+    let spirv = game_dir.join(SPIRV_REL);
+    fs::create_dir_all(out.parent().unwrap()).map_err(|e| e.to_string())?;
+    let part = out.with_extension("pack.part");
+    let mut f = std::io::BufWriter::with_capacity(8 << 20, fs::File::create(&part).map_err(|e| format!("cannot write {}: {}", part.display(), e))?);
+    f.write_all(&[0u8; 24]).map_err(|e| e.to_string())?;
+    let mut offset = 24u64;
+    let mut index: Vec<(u64, u64, u32, u32)> = Vec::with_capacity(hashes.len());
+    let jobs = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    let total = hashes.len() as u64;
+    for (bi, batch) in hashes.chunks(1024).enumerate() {
+        if cancel.load(Ordering::SeqCst) {
+            drop(f);
+            let _ = fs::remove_file(&part);
+            return Ok(false);
+        }
+        report(bi as u64 * 1024, total, format!("Packing the shaders for the PS5: {} of {}", bi * 1024, total));
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let slots: Vec<std::sync::Mutex<Option<(Vec<u8>, u32)>>> = batch.iter().map(|_| std::sync::Mutex::new(None)).collect();
+        std::thread::scope(|s| {
+            for _ in 0..jobs {
+                s.spawn(|| loop {
+                    let i = next.fetch_add(1, Ordering::SeqCst);
+                    if i >= batch.len() {
+                        break;
+                    }
+                    let p = spirv.join(format!("{:016x}.spv", batch[i]));
+                    if let Ok(data) = fs::read(&p) {
+                        if !data.is_empty() && data.len() % 4 == 0 {
+                            if let Ok(z) = zstd::bulk::compress(&data, 3) {
+                                *slots[i].lock().unwrap() = Some((z, data.len() as u32));
+                            }
+                        }
+                    }
+                });
+            }
+        });
+        for (i, slot) in slots.into_iter().enumerate() {
+            // a row without its .spv (a block the translator could not do) is simply not in the pack
+            if let Some((z, size)) = slot.into_inner().unwrap() {
+                f.write_all(&z).map_err(|e| format!("cannot write {}: {}", part.display(), e))?;
+                index.push((batch[i], offset, z.len() as u32, size));
+                offset += z.len() as u64;
+            }
+        }
+    }
+    for (h, o, z, s) in &index {
+        f.write_all(&h.to_le_bytes()).and_then(|_| f.write_all(&o.to_le_bytes())).and_then(|_| f.write_all(&z.to_le_bytes())).and_then(|_| f.write_all(&s.to_le_bytes())).map_err(|e| e.to_string())?;
+    }
+    let mut file = f.into_inner().map_err(|e| e.to_string())?;
+    use std::io::{Seek, SeekFrom};
+    let mut head = Vec::with_capacity(24);
+    head.extend_from_slice(b"NXSPPAK1");
+    head.extend_from_slice(&(index.len() as u32).to_le_bytes());
+    head.extend_from_slice(&0u32.to_le_bytes());
+    head.extend_from_slice(&offset.to_le_bytes());
+    file.seek(SeekFrom::Start(0)).and_then(|_| file.write_all(&head)).and_then(|_| file.sync_all()).map_err(|e| e.to_string())?;
+    drop(file);
+    fs::rename(&part, &out).map_err(|e| format!("cannot write {}: {}", out.display(), e))?;
+    fs::write(&stamp, rlen.to_string()).map_err(|e| e.to_string())?;
+    log(game_dir, &format!("pack: {} shaders, {} bytes", index.len(), offset + 24 * index.len() as u64));
+    report(total, total, format!("Packed {} shaders.", index.len()));
+    Ok(true)
 }
 
 /// Hashes with a row in results.tsv (translated, or tried and failed: either way not sent again).

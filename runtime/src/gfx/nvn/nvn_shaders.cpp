@@ -19,6 +19,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <mutex>
 #include <sstream>
 #include <unordered_set>
@@ -30,6 +31,8 @@
 #include <nxrt/config.h>
 #include <nxrt/gauge.h>
 #include <nxrt/log.h>
+
+#include "loader/zbic.h"
 
 namespace nxrt::nvn::be {
 
@@ -903,6 +906,80 @@ bool read_file(const std::string& path, std::string& out) {
     return true;
 }
 
+// spirv.pack: a whole shader cache in one file, for consoles (made by the launcher, launcher/src-tauri/src/shaders.rs make_pack): far
+// smaller than the loose files (each shader is one zstd frame) and one file to copy instead of ~100,000. Layout: "NXSPPAK1", u32 count,
+// u32 0, u64 index offset; the data; the index: count records of {u64 hash, u64 offset, u32 stored size, u32 size}, sorted by hash
+// (the 16 hex digits of <hash>.spv as a number). A loose <hash>.spv next to it wins.
+class SpvPack {
+public:
+    explicit SpvPack(std::string path) : path_(std::move(path)) {
+        std::ifstream f(path_, std::ios::binary);
+        char head[24] = {};
+        if (!f.read(head, sizeof head) || std::memcmp(head, "NXSPPAK1", 8) != 0) return;
+        uint32_t count = 0;
+        uint64_t index = 0;
+        std::memcpy(&count, head + 8, 4);
+        std::memcpy(&index, head + 16, 8);
+        idx_.resize(count);
+        f.seekg(static_cast<std::streamoff>(index));
+        if (!f.read(reinterpret_cast<char*>(idx_.data()), static_cast<std::streamsize>(count) * sizeof(Rec))) {
+            idx_.clear();
+            return;
+        }
+        ok_ = std::is_sorted(idx_.begin(), idx_.end(), [](const Rec& a, const Rec& b) { return a.hash < b.hash; });
+        if (!ok_) idx_.clear();
+    }
+    bool ok() const { return ok_; }
+    size_t count() const { return idx_.size(); }
+    bool read(const std::string& hash, std::string& out) const {
+        if (!ok_ || hash.size() != 16) return false;
+        char* end = nullptr;
+        const uint64_t h = std::strtoull(hash.c_str(), &end, 16);
+        if (end != hash.c_str() + 16) return false;
+        auto it = std::lower_bound(idx_.begin(), idx_.end(), h, [](const Rec& r, uint64_t v) { return r.hash < v; });
+        if (it == idx_.end() || it->hash != h || it->size == 0 || it->size > (256u << 20)) return false;
+        std::string packed(it->stored, '\0');
+        std::ifstream f(path_, std::ios::binary);
+        f.seekg(static_cast<std::streamoff>(it->offset));
+        if (!f.read(packed.data(), static_cast<std::streamsize>(packed.size()))) return false;
+        out.assign(it->size, '\0');
+        return nxrt::zstd_decompress(out.data(), out.size(), packed.data(), packed.size());
+    }
+
+private:
+#pragma pack(push, 1)
+    struct Rec {
+        uint64_t hash, offset;
+        uint32_t stored, size;
+    };
+#pragma pack(pop)
+    static_assert(sizeof(Rec) == 24);
+    std::string path_;
+    std::vector<Rec> idx_;
+    bool ok_ = false;
+};
+
+// The pack of a cache folder, opened on first use (null when the folder has none).
+const SpvPack* pack_for(const std::string& dir) {
+    static std::mutex mu;
+    static std::map<std::string, std::unique_ptr<SpvPack>> packs;
+    std::lock_guard lk(mu);
+    auto it = packs.find(dir);
+    if (it == packs.end()) {
+        auto p = std::make_unique<SpvPack>(dir + "/spirv.pack");
+        if (p->ok()) NXLOG_I("nvn", "shader cache %s: spirv.pack with %zu shaders", dir.c_str(), p->count());
+        it = packs.emplace(dir, p->ok() ? std::move(p) : nullptr).first;
+    }
+    return it->second.get();
+}
+
+// <hash>.spv of a cache folder: the loose file, else from the folder's spirv.pack.
+bool read_spv(const std::string& dir, const std::string& hash, std::string& out) {
+    if (read_file(dir + "/" + hash + ".spv", out)) return true;
+    const SpvPack* p = pack_for(dir);
+    return p && p->read(hash, out);
+}
+
 // Tab-separated column `col` (0-based) of one line; empty if the line has fewer columns.
 std::string column_text(std::string_view line, int col) {
     size_t start = 0;
@@ -1023,7 +1100,7 @@ std::unique_ptr<ShaderCache::Preloaded> ShaderCache::preload_one(const std::stri
         if (by_hash_.count(hash)) return nullptr;   // the game got there first
     }
     std::string bytes;
-    if (!read_file(dir_ + "/" + hash + ".spv", bytes) || bytes.empty() || bytes.size() % 4) return nullptr;
+    if (!read_spv(dir_, hash, bytes) || bytes.empty() || bytes.size() % 4) return nullptr;
     auto p = std::make_unique<Preloaded>();
     p->words.resize(bytes.size() / 4);
     std::memcpy(p->words.data(), bytes.data(), bytes.size());
@@ -1213,7 +1290,7 @@ const ShaderInfo* ShaderCache::load(const std::string& hash, const uint8_t* code
         words = std::move(pre->words);
     } else {
         std::string bytes;
-        if (!read_file(dir_ + "/" + hash + ".spv", bytes) || bytes.empty() || bytes.size() % 4) {
+        if (!read_spv(dir_, hash, bytes) || bytes.empty() || bytes.size() % 4) {
             dump_missing_block(hash, code, control, code_size);
             return miss("no usable " + dir_ + "/" + hash + ".spv");
         }
@@ -1258,7 +1335,7 @@ const ShaderInfo* ShaderCache::load_stub(const std::string& hash) {
         dir = dir_;
     }
     std::string bytes;
-    if (!read_file(dir + "/" + hash + ".spv", bytes) || bytes.empty() || bytes.size() % 4) {
+    if (!read_spv(dir, hash, bytes) || bytes.empty() || bytes.size() % 4) {
         if (!existing) {
             std::lock_guard lk(lock_);
             stubs_.emplace(hash, nullptr);

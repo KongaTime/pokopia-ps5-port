@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //! The launcher's PS5 install without the window (the same code as the PS5 page, ps5.rs):
-//!   cargo run --release --example ps5_install -- <game dir> <exefs> <romfs> <tools dir> <console ip> [check]
-//! <exefs> is the dump's own ExeFS with plain NSOs. "check" only connects to the console and says what is there.
+//!   cargo run --release --example ps5_install -- <game dir> <exefs> <romfs> <tools dir> <console ip> [check | - <file.nup>]
+//! <exefs> is the dump's own ExeFS with plain NSOs. "check" only connects to the console and says what is there. With a .nup the
+//! console gets that file instead of exefs/ and romfs/.
 //!   cargo run --release --example ps5_install -- upload-test <local dir> <console ip> <remote dir under /data/homebrew>
 //! uploads a folder to a scratch folder with the install's own uploader (four connections, size-based skip), uploads it again
 //! (nothing must be sent), checks every size, then deletes the scratch folder.
@@ -55,6 +56,7 @@ fn main() {
         exefs: exefs.clone(),
         dump_exefs: exefs.clone(),
         romfs: PathBuf::from(&a[2]),
+        nup: a.get(6).filter(|s| s.to_lowercase().ends_with(".nup")).map(PathBuf::from),
         main: exefs.join("main"),
         host: a[4].clone(),
         jobs: std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4),

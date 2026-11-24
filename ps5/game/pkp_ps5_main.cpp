@@ -17,12 +17,14 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <memory>
 #include <utility>
 #include <vector>
 #include <string>
+#include <dirent.h>
 #include <sys/stat.h>
 #include <thread>
 #include <unistd.h>
@@ -46,6 +48,7 @@
 #include "nxrt/runtime.h"
 
 #include "pkp/pkp_game.h"
+#include "../../runtime/src/services/fs_nup.h"
 #include "title_screen.h"
 
 namespace ps5compat { void crumb_dump(); void fault_uninstall(); }   // compat/win32_core.cpp, win32_fault.cpp
@@ -392,6 +395,37 @@ int main() {
         {"NXRT_NVN_TRACE_TRIGGER", "/pkp-trace"},
         {"NXRT_NVN_TRACE_DIR", "/pkp-results/trace/"},
     };
+    // The game as one .nup package (the player's own, in <title>/dump/ or the title folder itself): the romfs is read from inside it, in
+    // place (runtime/src/services/fs_nup.h, fs_romfs.cpp), and its few exefs files are written to <title>/exefs once, for the loader.
+    // A .nup wins over loose romfs/ and exefs/ folders; [fs] romfs in pkp-env.txt or pkp.ini still wins over both.
+    if (!getenv("NXRT_FS_ROMFS")) {
+        std::string nup;
+        for (const std::string dir : {std::string(kGame) + "/dump", std::string(kGame)}) {
+            if (DIR* d = opendir(dir.c_str())) {
+                std::vector<std::string> names;
+                while (dirent* e = readdir(d))
+                    if (nxrt::services::fs::nup::is_nup_path(e->d_name)) names.emplace_back(e->d_name);
+                closedir(d);
+                std::sort(names.begin(), names.end());
+                if (!names.empty()) {
+                    nup = dir + "/" + names.front();
+                    break;
+                }
+            }
+        }
+        if (!nup.empty()) {
+            nxrt::services::fs::nup::Program prog;
+            std::string err;
+            if (!nxrt::services::fs::nup::read_program(nup, prog, &err)) {
+                stage("nup %s: %s", nup.c_str(), err.c_str());
+            } else if (!nxrt::services::fs::nup::extract_files(nup, prog.exefs, std::string(kGame) + "/exefs", &err)) {
+                stage("nup %s: exefs not written: %s", nup.c_str(), err.c_str());
+            } else {
+                setenv("NXRT_FS_ROMFS", nup.c_str(), 0);
+                stage("game data from %s (version %u), exefs written to %s/exefs", nup.c_str(), prog.version, kGame);
+            }
+        }
+    }
     for (const auto& p : kPaths) setenv(p.env, (std::string(kGame) + p.path).c_str(), 0);
     // P3: the NVN back end on RADV, in a window that is the console's video output (SDL3's ps5 driver: VK_KHR_display).
     // [boot] gfx = none keeps P2's logging stubs.

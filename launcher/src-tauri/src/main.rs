@@ -474,6 +474,7 @@ fn ps5_start(app: AppHandle, host: String, state: State<Arc<Ps5State>>, setup: S
                 exefs: plain.clone(),
                 dump_exefs: exefs,
                 romfs: PathBuf::from(&chosen.romfs),
+                nup: if raw && nup_mode(&cfg.raw_inputs)? { Some(PathBuf::from(&cfg.raw_inputs[0])) } else { None },
                 main: plain.join(m.main_file()),
                 host: host.clone(),
                 jobs,

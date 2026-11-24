@@ -132,7 +132,7 @@ export async function render(el, ctx) {
         <div class="card">
           <h2>${icon('wrench')}3. Install</h2>
           <div class="stack">
-            <p class="dim">The first time takes hours: the build 10 to 30 minutes, the shader cache one to two hours, and the upload (about 50 GB) depends on your network. You can pause and continue later; finished work is kept, and files already on the console are not sent again. Close the game on the PS5 before installing an update.</p>
+            <p class="dim">The first time takes hours: the build 10 to 30 minutes, the shader cache under an hour on a fast PC, and the upload (about 18 GB: the game data and the shaders packed into one file) depends on your network. You can pause and continue later; finished work is kept, and files already on the console are not sent again. Close the game on the PS5 before installing an update.</p>
             ${st.steps.map(stepHtml).join('')}
             ${st.outcome === 'error' ? `<div class="banner danger">${icon('circle-x')}<div style="white-space: pre-wrap">${esc(st.message)}</div></div>` : ''}
             ${st.outcome === 'done' && !running ? `<div class="banner ok">${icon('circle-check')}<div>Everything is on your PS5. Start <b>PPSA90006</b> from the home screen (the first time, install it with your homebrew installer, as for any fake-signed title). On its start screen pick <b>Prepare game</b> once: it checks the files and shaders. Then <b>Play</b>.</div></div>` : ''}
