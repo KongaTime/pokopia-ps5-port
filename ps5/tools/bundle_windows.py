@@ -212,8 +212,15 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--out', required=True)
     ap.add_argument('--llvm', required=True, help='the extracted clang+llvm-<v>-x86_64-pc-windows-msvc folder')
-    ap.add_argument('--zig', required=True, help='zig.exe (builds ps5-native-tool.exe)')
+    ap.add_argument('--zig', help='zig.exe (builds ps5-native-tool.exe)')
+    ap.add_argument('--native-tool', help='an already built ps5-native-tool.exe (from an earlier bundle of the same PS5_Vulkan) instead of --zig')
     a = ap.parse_args()
+    if not a.zig and not a.native_tool:
+        fail('pass --zig <zig.exe> or --native-tool <ps5-native-tool.exe>')
+    native_tool = None
+    if a.native_tool:   # copied before --out is cleared: it may be the bundle being replaced
+        native_tool = os.path.join(os.environ.get('TMPDIR', '/tmp'), 'ps5-native-tool.exe')
+        shutil.copy2(a.native_tool, native_tool)
     env = os.environ
     sdk, vulkan, work = env['PS5_SDK'], env['PS5_VULKAN_DIR'], env['PKP_BUILD']
     build = os.path.join(work, 'game')
@@ -294,6 +301,8 @@ def main():
 
     print('==> ps5-native-tool.exe')
     native = os.path.join(vulkan, 'tooling', 'native')
+    if native_tool:
+        shutil.copy2(native_tool, os.path.join(out, 'bin', 'ps5-native-tool.exe'))
     zlib = os.path.join(vulkan, '.deps', 'native', 'zlib')
     zsrc = next((os.path.join(zlib, d) for d in sorted(os.listdir(zlib)) if d.startswith('zlib-') and os.path.isdir(os.path.join(zlib, d))), None)
     if not zsrc:
@@ -302,11 +311,12 @@ def main():
     tmp = os.path.join(out, 'bin', 'obj')
     os.makedirs(tmp)
     objs = []
-    for c in ('adler32', 'crc32', 'deflate', 'inflate', 'inftrees', 'inffast', 'trees', 'zutil', 'compress', 'uncompr'):
+    for c in ([] if native_tool else ('adler32', 'crc32', 'deflate', 'inflate', 'inftrees', 'inffast', 'trees', 'zutil', 'compress', 'uncompr')):
         o = os.path.join(tmp, c + '.o')
         run([a.zig, 'cc', '-target', 'x86_64-windows-gnu', '-O2', '-c', win(os.path.join(zsrc, c + '.c')), '-o', win(o)])
         objs.append(win(o))
-    run([a.zig, 'c++', '-target', 'x86_64-windows-gnu', '-std=c++20', '-O2', '-I', win(zsrc)]
+    if not native_tool:
+      run([a.zig, 'c++', '-target', 'x86_64-windows-gnu', '-std=c++20', '-O2', '-I', win(zsrc)]
         + [win(os.path.join(native, f)) for f in ('native_app_builder.cpp', 'self_container.cpp', 'elf_object.cpp', 'sce_module_writer.cpp')]
         + objs + ['-o', win(os.path.join(out, 'bin', 'ps5-native-tool.exe'))])
     shutil.rmtree(tmp)
